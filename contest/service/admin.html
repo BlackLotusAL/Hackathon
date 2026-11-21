@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>初赛单循环 · Contest</title>
+  <style>
+    :root { font-family: Inter, system-ui, "Microsoft YaHei", sans-serif; color: #172540; background: #f4f6fb; }
+    body { margin: 0; }
+    main { max-width: 70rem; margin: auto; padding: clamp(1rem, 4vw, 3rem); }
+    header { display: flex; align-items: baseline; flex-wrap: wrap; gap: .5rem 1rem; margin-bottom: 1.5rem; }
+    h1 { font-size: clamp(1.6rem, 4vw, 2.4rem); margin: 0; }
+    h2 { font-size: 1.08rem; margin: 0 0 1rem; }
+    section { background: #fff; border: 1px solid #dce4f1; border-radius: .75rem; padding: 1.2rem; margin-bottom: 1rem; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1rem; }
+    .actions, form { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
+    form { margin: 0; }
+    input, select, button, a[download] { font: inherit; }
+    input[type=file] { max-width: 100%; }
+    button, a[download] { display: inline-block; padding: .55rem .85rem; border: 1px solid #bac8e0;
+      border-radius: .45rem; background: #fff; color: #1d3c75; text-decoration: none; cursor: pointer; }
+    #plan, a[download] { background: #214fba; border-color: #214fba; color: #fff; }
+    button:disabled, a[aria-disabled=true] { color: #576782; background: #eef2f8; border-color: #dce4f1; cursor: default; }
+    a[aria-disabled=true] { pointer-events: none; }
+    :focus-visible { outline: 2px solid #214fba; outline-offset: 3px; }
+    .muted, #state { color: #4b5d7b; }
+    #message { min-height: 1.3em; margin: .75rem 0 0; }
+    #message[data-error] { color: #9c2933; }
+    dl { display: grid; grid-template-columns: 1fr auto; gap: .55rem 1rem; margin: 0; }
+    dd { margin: 0; font-weight: 650; font-variant-numeric: tabular-nums; }
+    .scroll { overflow: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th, td { padding: .5rem .65rem; border-bottom: 1px solid #e5ebf5; }
+    summary { cursor: pointer; font-weight: 650; margin: .25rem 0; }
+    .withdraw { padding-top: .9rem; margin-top: .9rem; border-top: 1px solid #e5ebf5; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+<main>
+  <header><h1>初赛单循环</h1><span id="state" role="status">正在读取进度</span></header>
+  <section aria-labelledby="manage-title">
+    <h2 id="manage-title">名单与赛果</h2>
+    <div class="actions">
+      <form id="import-form">
+        <label for="file">队伍名单 XLSX</label>
+        <input id="file" type="file" accept=".xlsx" required>
+        <button id="import" type="submit" disabled>导入名单</button>
+      </form>
+      <button id="plan" type="button" disabled>创建单循环</button>
+      <button id="confirm" type="button" disabled>确认赛果</button>
+      <a id="export" download="初赛结果.xlsx" aria-disabled="true">下载初赛结果</a>
+    </div>
+    <p id="message" role="status"></p>
+    <details>
+      <summary id="roster-title">队伍名单</summary>
+      <div class="scroll"><table><thead><tr><th>队伍编号</th><th>队名</th></tr></thead><tbody id="roster"></tbody></table></div>
+    </details>
+    <form class="withdraw" id="withdraw-form" hidden>
+      <label for="withdraw-team">退赛队伍</label>
+      <select id="withdraw-team" required></select>
+      <button id="withdraw" type="submit">登记退赛</button>
+      <span class="muted">未下达 Arena 的场次按整场判负处理。</span>
+    </form>
+  </section>
+  <div class="grid">
+    <section aria-labelledby="duels-title"><h2 id="duels-title">对决进度</h2><dl id="duels"></dl></section>
+    <section aria-labelledby="games-title"><h2 id="games-title">预定局进度</h2><dl id="games"></dl></section>
+  </div>
+  <section id="attention-section" aria-labelledby="attention-title" hidden>
+    <h2 id="attention-title">待处理记录</h2>
+    <div class="scroll"><table><thead><tr><th>对决编号</th><th>预定局序</th><th>执行编号</th><th>原因</th><th>操作</th></tr></thead><tbody id="attention"></tbody></table></div>
+  </section>
+  <section id="ranking-section" aria-labelledby="ranking-title" hidden>
+    <h2 id="ranking-title">初赛排名</h2>
+    <p id="ranking-status" class="muted" hidden></p>
+    <div class="scroll"><table><thead><tr><th>名次</th><th>队伍编号</th><th>胜局数</th><th>负局数</th></tr></thead><tbody id="ranking"></tbody></table></div>
+  </section>
+  <section aria-labelledby="arena-title">
+    <h2 id="arena-title">Arena 槽位与队列</h2>
+    <p id="arena-time" class="muted">正在读取 Arena 状态</p>
+    <dl id="arena"></dl>
+  </section>
+</main>
+<script>
+  'use strict';
+  const node = id => document.getElementById(id);
+  const base = '/admin/prelim';
+  const stateLabel = {
+    empty: '等待导入名单', roster_imported: '名单已导入', running: '单循环执行中',
+    awaiting_confirmation: '等待确认赛果', confirmed: '赛果已确认'
+  };
+  let changing = false;
+  let version = 0;
+  let lastProgress;
+  let rankingRequested = false;
+
+  function pairs(id, values) {
+    node(id).replaceChildren(...values.flatMap(([label, value]) => {
+      const term = document.createElement('dt');
+      const detail = document.createElement('dd');
+      term.textContent = label;
+      detail.textContent = value;
+      return [term, detail];
+    }));
+  }
+
+  function rows(id, data) {
+    node(id).replaceChildren(...data.map(record => {
+      const row = document.createElement('tr');
+      for (const value of record) {
+        const cell = row.insertCell();
+        if (value instanceof Node) cell.append(value);
+        else cell.textContent = value ?? '';
+      }
+      return row;
+    }));
+  }
+
+  function retryButton(item) {
+    if (!item.retryable) return '';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.disabled = changing;
+    button.textContent = '重跑';
+    button.setAttribute('aria-label', `重跑 ${item.run_id}`);
+    button.addEventListener('click', () => change(
+      'retry', '已提交重跑', JSON.stringify({run_id: item.run_id}), 'application/json'
+    ));
+    return button;
+  }
+
+  function render(data) {
+    lastProgress = data;
+    node('state').textContent = stateLabel[data.state];
+    const {duels, games, attempts, teams, attention} = data;
+    pairs('duels', [
+      ['已结算场次', `${duels.settled} / ${duels.total}`], ['待处理场次', duels.awaiting_action], ['其余未结算', duels.pending]
+    ]);
+    pairs('games', [
+      ['有效局数', `${games.effective} / ${games.total}`], ['裁定免打', games.waived],
+      ['待提交', games.pending], ['等待 Arena 结果', games.waiting_result], ['待复核', games.waiting_review],
+      ['待人工处理', games.awaiting_action], ['交付未确认', games.unconfirmed],
+      ['已登记重跑尝试', attempts.retries], ['累计作废尝试', attempts.voided]
+    ]);
+    node('roster-title').textContent = `队伍名单（${teams.length}）`;
+    rows('roster', teams.map(team => [team.team_id, team.name]));
+    node('attention-section').hidden = attention.length === 0;
+    rows('attention', attention.map(item => [item.duel_id, item.ordinal, item.run_id, item.issue, retryButton(item)]));
+    const canImport = ['empty', 'roster_imported'].includes(data.state);
+    node('file').disabled = changing || !canImport;
+    node('import').disabled = changing || !canImport;
+    node('plan').disabled = changing || data.state !== 'roster_imported';
+    node('confirm').disabled = changing || data.state !== 'awaiting_confirmation';
+    const download = node('export');
+    const confirmed = data.state === 'confirmed';
+    download.setAttribute('aria-disabled', String(!confirmed));
+    if (confirmed) download.href = `${base}/results.xlsx`;
+    else download.removeAttribute('href');
+    const rankingReady = confirmed || data.state === 'awaiting_confirmation';
+    node('ranking-section').hidden = !rankingReady;
+    if (rankingReady && !rankingRequested) refreshRanking();
+
+    const select = node('withdraw-team');
+    const available = teams.filter(team => !team.withdrawn);
+    node('withdraw-form').hidden = data.state !== 'running' || available.length === 0;
+    if (!node('withdraw-form').hidden) {
+      const selected = select.value;
+      select.replaceChildren(new Option('请选择队伍', ''), ...available.map(team =>
+        new Option([team.team_id, team.name].filter(Boolean).join(' '), team.team_id)));
+      if (available.some(team => team.team_id === selected)) select.value = selected;
+      select.disabled = node('withdraw').disabled = changing;
+    }
+  }
+
+  async function request(path, options) {
+    const response = await fetch(path, {cache: 'no-store', ...options});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.message || `请求失败（${response.status}）`);
+    return data;
+  }
+
+  function message(text, error = false) {
+    node('message').textContent = text;
+    node('message').toggleAttribute('data-error', error);
+  }
+
+  async function refresh() {
+    if (changing) return;
+    const current = ++version;
+    try {
+      const data = await request(`${base}/progress`);
+      if (current === version) render(data);
+    } catch (error) {
+      if (current === version) message(error.message, true);
+    }
+  }
+
+  async function refreshArena() {
+    try {
+      const data = await request('/admin/arena/status');
+      node('arena-time').textContent = data.at;
+      pairs('arena', [
+        ['空闲槽位', data.slots.idle], ['使用中槽位', data.slots.busy], ['停用槽位', data.slots.disabled],
+        ['排队执行', data.queue], ['近 10 分钟完成执行', data.done_10m], ['近 1 小时平台故障', data.platform_errors_1h]
+      ]);
+    } catch (error) {
+      node('arena-time').textContent = 'Arena 状态暂不可用';
+      node('arena').replaceChildren();
+    }
+  }
+
+  async function refreshRanking() {
+    rankingRequested = true;
+    try {
+      const data = await request(`${base}/standings`);
+      rows('ranking', data.rows);
+      node('ranking-status').hidden = true;
+    } catch (error) {
+      node('ranking-status').textContent = error.message;
+      node('ranking-status').hidden = false;
+      rankingRequested = false;
+    }
+  }
+
+  async function change(action, done, body, contentType) {
+    if (changing) return;
+    changing = true;
+    ++version;
+    if (lastProgress) render(lastProgress);
+    let data = lastProgress;
+    const headers = {'X-Contest-Admin': '1'};
+    if (contentType) headers['Content-Type'] = contentType;
+    try {
+      data = await request(`${base}/${action}`, {method: 'POST', headers, body});
+      message(done);
+    } catch (error) {
+      message(error.message, true);
+    } finally {
+      changing = false;
+      if (data) render(data);
+    }
+  }
+
+  node('import-form').addEventListener('submit', event => {
+    event.preventDefault();
+    const file = node('file').files[0];
+    if (file) change('roster', '名单已导入', file, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  });
+  node('plan').addEventListener('click', () => change('plan', '已创建单循环'));
+  node('confirm').addEventListener('click', () => change('confirm', '已确认初赛赛果'));
+  node('withdraw-form').addEventListener('submit', event => {
+    event.preventDefault();
+    change('withdraw', '已登记退赛', JSON.stringify({teams: [node('withdraw-team').value]}), 'application/json');
+  });
+  refresh();
+  refreshArena();
+  setInterval(refresh, 5000);
+  setInterval(refreshArena, 15000);
+</script>
+</body>
+</html>
+

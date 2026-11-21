@@ -1,0 +1,8 @@
+**
+!contest/
+!contest/engine/
+!contest/engine/*.py
+!contest/judge/
+!contest/judge/*.py
+**/__pycache__
+**/*.pyc
