@@ -23,14 +23,23 @@ from zipfile import ZipFile
 
 
 from engine.mapgen import generate
-from engine.protocol import VERSION, dumps, json_object
+from engine.protocol import dumps, json_object
 from judge.task import run_task
+from service.duels import insert_plan
 from service.server import handler_for
 from service.workbook import MIME, ROSTER_HEADERS, SHEET_XML, write_workbook
 
 
 CONTEST = Path(__file__).resolve().parents[1]
 TEAMS = ['team001', 'team002']
+
+
+def plan_duel(contest, duel_id, kind, sides=TEAMS):
+    """Seed a known plan for tests of scheduling, archives or historical results."""
+    rules = kind.split('-')[0]
+    maps = [{'seed': 42}] if kind.endswith('-ladder') else contest.maps[rules]
+    with contest.database.transaction() as connection:
+        insert_plan(connection, kind, {'duel_id': duel_id, 'rules': rules, 'sides': sides}, maps)
 
 
 class WorkspaceFixture(unittest.TestCase):
@@ -40,9 +49,8 @@ class WorkspaceFixture(unittest.TestCase):
         self.root = Path(temporary.name)
 
 
-def run_module(package, *arguments, env=None, expected=0):
+def run_module(package, *arguments, expected=0):
     environment = dict(os.environ, PYTHONIOENCODING='utf-8')
-    environment.update(env or {})
     completed = subprocess.run([sys.executable, '-B', '-m', package, *map(str, arguments)],
                                cwd=CONTEST, env=environment, capture_output=True,
                                encoding='utf-8', timeout=30)
@@ -51,8 +59,11 @@ def run_module(package, *arguments, env=None, expected=0):
     return completed
 
 
-def write_config(path, *, template='local', **overrides):
-    values = json.loads((CONTEST / 'config' / f'{template}.example.json').read_text(encoding='utf-8'))
+def write_config(path, **overrides):
+    source = CONTEST / 'config/contest.example.json'
+    values = json.loads(source.read_text(encoding='utf-8'))
+    if values.get('maps') is not None:
+        values['maps'] = str(source.parent / values['maps'])
     values.update(overrides)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(dumps(values), encoding='utf-8')
@@ -158,13 +169,11 @@ def _http_server(handler):
 
 
 @contextmanager
-def http_bots():
-    """Seat 0 captures a square; seat 1 travels down; both require the v1 protocol."""
+def http_bots(run_id):
+    """Run one service per Bot and require the same execution ID on both."""
     class Handler(_JsonHandler):
         def valid_request(self):
-            return (self.headers.get('X-Arena-Token') is None
-                    and self.headers.get('Authorization') is None
-                    and self.headers.get('X-Arena-Protocol') == VERSION)
+            return self.path.startswith('/v1/') and self.headers.get('Authorization') is None
 
         def do_GET(self):
             if not self.valid_request():
@@ -174,26 +183,36 @@ def http_bots():
         def do_POST(self):
             if not self.valid_request():
                 return self.reply(400)
+            seat = self.server.seat
             message = self.read_json()
-            match_id = self.path.split('/')[3]
-            if message['type'] == 'init':
-                self.server.stages[match_id] = message['stage']
-                return self.reply(204)
-            if message['type'] == 'end':
-                self.server.stages.pop(match_id)
-                return self.reply(204)
-            if ('latent' in message) != (self.server.stages[match_id] == 'final'):
+            kind = message['type']
+            action = f'turns/{message["turn"]}' if kind == 'turn' else kind
+            if self.path != f'/v1/matches/{run_id}/{action}':
                 return self.reply(400)
-            command = ('R', 'U', 'L', 'D')[((message['turn'] - 1) // 4) % 4] if self.server.seat == 0 else 'D'
+            if kind == 'init':
+                if message['seat'] != seat or self.server.stage is not None:
+                    return self.reply(400)
+                self.server.stage = message['stage']
+                return self.reply(204)
+            if self.server.stage is None:
+                return self.reply(404)
+            if kind == 'end':
+                self.server.stage = None
+                return self.reply(204)
+            final = self.server.stage == 'final'
+            if any((field in message) != final for field in ('latent', 'latent_regions')):
+                return self.reply(400)
+            command = ('R', 'U', 'L', 'D')[((message['turn'] - 1) // 4) % 4] if seat == 0 else 'D'
             self.reply(200, {'turn': message['turn'], 'cmd': command})
 
-    with ExitStack() as servers:
-        specs = []
-        for seat, team in enumerate(TEAMS):
-            server = servers.enter_context(_http_server(Handler))
-            server.seat, server.stages = seat, {}
-            specs.append({'name': team, 'url': f'http://127.0.0.1:{server.server_port}'})
-        yield specs
+    with ExitStack() as resources:
+        servers = [resources.enter_context(_http_server(Handler)) for _ in TEAMS]
+        for seat, server in enumerate(servers):
+            server.seat, server.stage = seat, None
+        yield [{'name': team, 'url': f'http://127.0.0.1:{server.server_port}'}
+               for team, server in zip(TEAMS, servers)]
+        if any(server.stage is not None for server in servers):
+            raise AssertionError('Missing end request for one or more Bot services')
 
 
 class Bot:
@@ -206,10 +225,10 @@ class Bot:
     def start(self, limit):
         return True, 'ready'
 
-    def post(self, match_id, action, body, limit):
+    def post(self, run_id, action, body, limit):
         return self.init if action == 'init' else 'ok', 204, None, 99
 
-    def turn(self, match_id, body, limit):
+    def turn(self, run_id, body, limit):
         if self.exit_after_reply:
             self.exit_info = {'exit_code': 137, 'oom': True}
         us = self.us(body['turn']) if callable(self.us) else self.us
@@ -380,7 +399,7 @@ def arena_archive(output, bots, *, state='finished', duel_started_at=None):
     manifest = {'bots': bots}
     if state == 'finished':
         result = json_object((output / 'result.json').read_bytes())
-        fields = ('engine_version', 'map', 'map_sha256', 'winner', 'reason',
+        fields = ('run_id', 'engine_version', 'map', 'map_sha256', 'winner', 'reason',
                   'score', 'bonus', 'lead_turns', 'time_us')
         manifest['result'] = {key: result[key] for key in fields}
     if duel_started_at is not None:

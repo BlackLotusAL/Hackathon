@@ -1,14 +1,14 @@
 #pragma once
 
-#include "arena_strategy.hpp"
+#include "bot_sdk.hpp"
 
 #include <string>
 
 class Strategy {
 public:
-    explicit Strategy(const arena::InitState& init) : init_(init) {}
+    explicit Strategy(const bot_sdk::InitState& init) : init_(init) {}
 
-    std::string act(const arena::TurnState& state) {
+    std::string act(const bot_sdk::TurnState& state) {
         const auto& me = state.beams[init_.seat];
         const std::string directions = "UDLR";
         const auto forward = directions.find(me.dir);
@@ -33,5 +33,5 @@ public:
     }
 
 private:
-    arena::InitState init_;
+    bot_sdk::InitState init_;
 };

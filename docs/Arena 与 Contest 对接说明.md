@@ -9,7 +9,7 @@ Arena 与 Contest 部署在同一台 Linux 服务器，接口使用本机 HTTP�
 | 用途 | 方法与路径 | 成功响应 |
 | --- | --- | --- |
 | 提交单局执行 | `POST /arena/v1/runs` | `202 Accepted`，空响应体 |
-| 查询单局执行（支持批量） | `POST /arena/v1/runs/query` | `200 OK`，逐局状态及未找到的编号 |
+| 查询执行状态（支持批量） | `POST /arena/v1/runs/query` | `200 OK`，逐局状态及未找到的编号 |
 | 查询整体运行状态 | `GET /arena/v1/status` | `200 OK`，运行统计 JSON |
 
 HTTP 报文与归档中的 JSON、JSONL 使用 UTF-8。错误响应是包含稳定 `code` 的 JSON 对象，可附 `message`。时间采用带 `+08:00` 的 ISO 8601 格式。
@@ -33,10 +33,10 @@ HTTP 报文与归档中的 JSON、JSONL 使用 UTF-8。错误响应是包含稳�
 
 | 地图类型 | `config.map` 字段 |
 | --- | --- |
-| 天梯生成地图 | `seed` 为请求指定的 JSON 整数种子 |
-| 正式地图 | `file` 为封存地图文件的完整 UTF-8 文本字符串，`sha256` 为该文件已公布的 SHA-256，用 64 位小写十六进制表示 |
+| 天梯生成地图 | `seed` 为 Contest 随机生成并随对决固定的 JSON 整数种子 |
+| 固定地图文件 | `file` 为地图文件的完整 UTF-8 文本字符串。`sha256` 为该文本的 SHA-256，以 64 位小写十六进制表示。固定地图池使用赛前已公布的哈希 |
 
-`seed` 和 `file` 互斥，由此区分天梯和正式对决。`rules` 用于选取赛段规则。裁判将外层 JSON 解码后的 `file` 编码为 UTF-8 并核验哈希，原有的空白和换行均参与计算。Arena 按收到的 `config` 和 `bots` 顺序执行单局，使用原 `run_id` 查询和归档。
+`seed` 和 `file` 互斥。天梯对决交付种子，初赛单循环、正式决赛和独立压测交付固定地图文件。正式决赛使用 `rules: "final"` 和决赛地图池的 `file`、`sha256`。裁判将外层 JSON 解码后的 `file` 编码为 UTF-8 并核验哈希，原有的空白和换行均参与计算。Arena 按收到的 `config` 和 `bots` 顺序执行单局，使用原 `run_id` 查询和归档。
 
 ### 2.2 天梯提交示例
 
@@ -58,15 +58,15 @@ curl -i -X POST 'http://127.0.0.1:18080/arena/v1/runs' \
   --data-binary @run-7001.1.json
 ```
 
-### 2.3 正式对决提交示例
+### 2.3 初赛单循环提交示例
 
-本例为决赛 `duel-1902` 第一局的首次尝试。填入该场第一张封存地图的完整文本和已公布的哈希，保存为 `run-7003.1.json`。沿用上一节的提交命令，将 `--data-binary` 的参数改为 `@run-7003.1.json`。
+本例为初赛单循环 `duel-prelim-789` 第一局的首次尝试。填入该场第一张封存地图的完整文本和已公布的哈希，保存为 `run-7003.1.json`。沿用上一节的提交命令，将 `--data-binary` 的参数改为 `@run-7003.1.json`。
 
 ```json
 {
   "run_id": "run-7003.1",
-  "duel_id": "duel-1902",
-  "rules": "final",
+  "duel_id": "duel-prelim-789",
+  "rules": "prelim",
   "bots": ["team001", "team003"],
   "config": {
     "map": {
@@ -87,7 +87,7 @@ curl -i -X POST 'http://127.0.0.1:18080/arena/v1/runs' \
 
 幂等判断使用完整的 `run_id` 和解码后的 JSON 字段值。对象字段顺序可不同，数组顺序和字符串原值参与比较。同一编号的并发提交至多产生一次执行。受理记录须在返回 `202` 前可按原编号查询，响应丢失或服务重启后也可用原编号补发。
 
-## 3. 查询单局执行
+## 3. 执行状态查询
 
 `POST /arena/v1/runs/query` 是所有赛程共用的只读查询接口。请求使用 `Content-Type: application/json`，`run_ids` 包含 1 至 100 个互不重复的完整执行编号，含尝试后缀。查询单局时使用相同接口，例如 `{"run_ids":["run-1201.1"]}`。
 
@@ -120,11 +120,11 @@ curl -i 'http://127.0.0.1:18080/arena/v1/runs/query' \
 | 场景 | 查询节奏 |
 | --- | --- |
 | 正式初赛、独立压测 | 每 10 秒一轮。查询已受理或提交未确认、尚未取得终态的当前尝试。每批最多 100 个编号，按批次顺序发送。例如同一轮有 103 个待查编号时，发出 100 条和 3 条两次请求。上一轮还未结束时跳过当前定时点，查询失败的尝试留到下一轮 |
-| 天梯、决赛 | 每次发送一个编号。返回 `queued` 或 `running` 后至少等待 0.5 秒再查询，失败时从 1 秒退避至最多 30 秒 |
+| 天梯对决、正式决赛 | 每次发送一个编号。返回 `queued` 或 `running` 后至少等待 0.5 秒再查询，失败时从 1 秒退避至最多 30 秒 |
 
 已确认受理的编号进入 `missing_run_ids` 时提示主办方核对。同批其他编号的有效状态仍可落库。
 
-主办方结束压测批次或录入决赛资格判负后，Contest 停止提交和查询对应对决的单局，忽略在途响应。
+主办方结束压测批次后，Contest 停止提交和查询该批次的单局，忽略在途响应。
 
 ### 3.3 单局执行状态
 
@@ -146,7 +146,7 @@ curl -i 'http://127.0.0.1:18080/arena/v1/runs/query' \
 
 | `reason` | 含义 |
 | --- | --- |
-| `judge_crash` | 裁判异常退出或缺少必需输出 |
+| `judge_crash` | 裁判异常退出、缺少必需输出或输出的执行编号与任务不符 |
 | `wall_timeout` | 整局运行超时 |
 | `container_start_failed` | 容器因平台故障启动失败 |
 | `slot_unhealthy` | 槽位健康检查失败或运行条件不符合要求 |
@@ -191,7 +191,7 @@ curl -i 'http://127.0.0.1:18080/arena/v1/status'
 
 ## 5. 归档交付要求
 
-Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂载路径可以不同，指向同一份存储。Contest 的 `archive_root` 若为相对路径，以 Contest 安装目录为基准。项目位于 `/srv/hackathon` 时，正式环境示例为 `/srv/hackathon/contest/var/archives/contest/`，本地联调示例为 `/srv/hackathon/contest/var/archives/contest-local/`。
+Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂载路径可以不同，指向同一份存储。Contest 的 `archive_root` 若为相对路径，以 Contest 安装目录为基准。项目位于 `/srv/hackathon` 时，归档根目录示例为 `/srv/hackathon/contest/var/archives/contest/`。
 
 ```text
 <archive_root>/
@@ -223,7 +223,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 }
 ```
 
-随后 Contest 读取 `runs/run-7001.2/match.json`。其中 `result` 取自该次裁判的 `/out/result.json`。
+随后 Contest 读取 `runs/run-7001.2/match.json`。Arena 从同一次裁判的 `/out/result.json` 取得 `result`，原样保留裁判写入的 `run_id`，发布前核对它与任务的完整 `run_id` 一致。Contest 复核时再次比对该字段与本次执行编号，缺失或不一致时暂缓结算。
 
 ```json
 {
@@ -233,6 +233,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
   ],
   "duel_started_at": "2026-11-27T14:05:00+08:00",
   "result": {
+    "run_id": "run-7001.2",
     "engine_version": "exposure-field/3",
     "map": "R42",
     "map_sha256": "79c625cec70b0666fe29bb8ed8ebb9684c1042344848588c2980c2cfe5f20075",
@@ -249,7 +250,8 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 | 字段 | 含义 |
 | --- | --- |
 | `bots` | 按请求的出生点顺序提供两项，每项包含与请求一致的 `team_id`。参赛队伍必填实际固定的 `commit`，基准 Bot 可省略 `commit`。`bots[].state` 仅用于构建失败清单 |
-| `duel_started_at` | 天梯必填，使用第 6.1 节保存的时间字符串，格式为带 `+08:00` 的 ISO 8601。正式比赛可省略 |
+| `duel_started_at` | 天梯对决必填，使用第 6.1 节保存的时间字符串，格式为带 `+08:00` 的 ISO 8601。初赛单循环、正式决赛和压测可省略 |
+| `result.run_id` | 必填字符串，取自裁判原始输出，须与本次完整 `run_id` 一致，含尝试后缀，例如 `run-7001.2` |
 | `result.engine_version` | 实际使用的引擎版本 |
 | `result.map`、`result.map_sha256` | 实际地图编号及哈希。正式地图的哈希须与请求的 `config.map.sha256` 一致 |
 | `result.winner`、`result.reason` | 胜方出生点 `0` 或 `1`（未决胜时为 `null`）及裁判的单局终止原因。按当局的 `bots` 确定参赛方 |
@@ -275,7 +277,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 
 ### 5.3 回放与裁判观测
 
-`replay.json` 的 `format` 为 `arena-replay/2`。
+`replay.json` 的 `format` 为 `match-replay/2`。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -295,7 +297,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 
 请求状态取 `ok`、`timeout`、`connection`、`invalid` 或 `crash`。日志条目含 `exits` 时，按出生点记录两个对象或 `null`，对象包含 `exit_code` 和 `oom`。公开回放中对应的 `observations[].exits` 使用两个布尔值。
 
-原样交付裁判生成的 `replay.json` 和 `log.jsonl`。同版引擎复算使用观测中的整数微秒。
+原样交付裁判生成的 `replay.json` 和 `log.jsonl`。Contest 使用同版引擎复算初始局面、逐回合状态和终局结果，并核对裁判日志。正式计时取 `observations[].us` 的整数微秒。独立复核命令支持用 `--log-file` 核对同一次执行的日志。
 
 已复核的单局需要人工裁定时，Contest 单独保存生效胜方和理由，Arena 继续提供对应 `run_id` 的原始清单、回放与日志。
 
@@ -303,7 +305,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 
 ### 6.1 固定参赛版本与开始时间
 
-天梯使用挑战开始时各队仓库的 `main` 分支提交，基准 Bot 使用当期版本。初赛单循环和决赛使用该赛段提交截止、仓库锁定时记录的 `main` 分支最终提交。独立压测使用初赛规则与测试名单中队伍的已固定提交，`duel_id` 以 `duel-load-` 开头，`run_id` 继续由 Contest 在同一编号序列中分配。
+天梯对决使用对决开始时各队仓库的 `main` 分支提交，基准 Bot 使用当期版本。初赛单循环和正式决赛使用该赛段提交截止、仓库锁定时记录的 `main` 分支最终提交。独立压测使用初赛规则与测试名单中队伍的已固定提交，`duel_id` 以 `duel-load-` 开头，`run_id` 继续由 Contest 在同一编号序列中分配。
 
 首次构建前按 `duel_id` 持久保存参赛方编号与固定版本的对应关系。同场各局及重跑按参赛方编号取固定版本，再按该局 `bots` 的顺序分配到出生点。首次尝试未生成归档时，固定记录仍须保留。
 
@@ -311,15 +313,17 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 
 ### 6.2 镜像交付与任务文件
 
-从固定提交的代码树构建 Bot。提交根目录包含 UTF-8 编码的 `bot.json` 和非空的 `README.md`。使用当期选手材料包提供的 SDK 和官方入口，按 `bot.json` 的 `language` 选择构建方式。
+Arena 从固定提交的代码树构建 Bot。提交根目录包含 UTF-8 编码的 `bot.json` 和非空的 `README.md`。使用当期选手材料包提供的 SDK 和官方入口，按 `bot.json` 的 `language` 选择构建方式。
 
 | `language` | 提交所需文件 | 构建和启动 |
 | --- | --- | --- |
-| `python` | `strategy.py`、`requirements.txt` | 在 Bot 运行环境安装依赖，以 `python -B -u <材料包目录>/backend/runtime/strategy_entry.py <提交目录>` 启动官方 HTTP 服务。入口加载 `Strategy` |
-| `cpp` | `strategy.hpp`、`CMakeLists.txt` | 在材料包目录执行 `python -m exposure build <提交目录> -t <镜像标签>`，使用官方 C++ 入口和 HTTP 适配器 |
-| `java` | `pom.xml`、`src/main/java/arena/bot/Strategy.java` | 同一构建命令按 Java 模板构建，镜像使用官方 `arena.bot.Main` 入口 |
+| `python` | `strategy.py`、`requirements.txt` | 在 Bot 运行环境放置与任务 `rules` 对应的 Python 运行包，按 `requirements.txt` 安装提交声明的依赖。以运行包根目录为工作目录，运行 `python -E -s -B -u -m sdk.python <提交目录绝对路径>`，入口加载 `Strategy` |
+| `cpp` | `strategy.hpp`、`CMakeLists.txt` | 以材料包的 `sdk/cpp/` 为 CMake 源目录，用 `-DBOT_SUBMISSION=<提交目录绝对路径>` 指定提交并构建 `bot` 目标。可用 `-DBOT_OUTPUT_DIR=<产物目录>` 指定可执行文件的输出目录。Bot 通过 `sdk.cpp.cpp_gateway` 提供 HTTP 接口 |
+| `java` | `pom.xml`、`Strategy.java` | 将提交根目录的 `.java` 文件和启动适配器纳入 Maven 的 `bot` 包源码目录，SDK 状态类型放在 `bot.sdk` 包源码目录。镜像使用 `bot.Main` 入口 |
 
-C++ 和 Java 镜像使用 Docker 与 Buildx 构建为 Linux amd64。基础镜像和依赖可来自已准备的缓存或构建源，可分别用 `ARENA_CMAKE_INDEX_URL` 和 `ARENA_MAVEN_MIRROR_URL` 指定依赖源。Bot 容器内设置 `BOT_HOST=0.0.0.0`、`BOT_PORT=8080`，`BOT_TOKEN` 留空，供本局网络内的裁判调用。
+Arena 按任务的 `rules` 提供 Python Bot 运行环境。决赛天梯和正式决赛均使用 `final`。两个赛段提供相同的 Python 策略入口和 SDK 状态类型，选手及基准 Bot 可以沿用同一份提交代码。`engine.rules` 的参数和 `TurnState.game` 的推演须与本局裁判使用的规则一致，决赛推演须支持潜像规则。
+
+C++ 和 Java 的正式 Bot 镜像由 Arena 构建，运行平台为 Linux amd64。Bot 容器内设置 `BOT_HOST=0.0.0.0` 和 `BOT_PORT=8080`，供本局网络内的裁判调用。
 
 裁判镜像包含 `judge` 和 `engine`，运行平台为 Linux amd64，基础镜像使用 Python 3.9.11，当前引擎版本为 `exposure-field/3`。通过镜像仓库或离线包交付时注明适用赛段、标签、digest 和引擎版本。Arena 记录实际使用的镜像及 digest。在含 `contest/` 的源码根目录可构建联调用镜像。
 
@@ -327,7 +331,7 @@ C++ 和 Java 镜像使用 Docker 与 Buildx 构建为 Linux amd64。基础镜像
 docker build --platform linux/amd64 -f contest/judge/Dockerfile -t exposure-judge:local .
 ```
 
-将任务目录只读挂载到 `/task`，入口读取 `/task/task.json`。沿用请求的 `run_id`、`rules` 和 `config`，将两个 `bots` 编号按原顺序换成含 HTTP 服务根地址 `url` 的对象。可在 `name` 填写原参赛方编号，裁判将其作为回放显示名。裁判默认使用任务文件的 `rules`，本地执行时可用 `--stage` 覆盖，省略 `rules` 时默认为初赛。
+将任务目录只读挂载到 `/task`，入口读取 `/task/task.json`。沿用请求的 `run_id`、`rules` 和 `config`，将两个 `bots` 编号按原顺序换成含各自 HTTP 服务根地址 `url` 的对象。可在 `name` 填写原参赛方编号，裁判将其作为回放显示名。裁判默认使用任务文件的 `rules`，本地执行时可用 `--stage` 覆盖，省略 `rules` 时默认为初赛。
 
 ```json
 {
@@ -343,16 +347,18 @@ docker build --platform linux/amd64 -f contest/judge/Dockerfile -t exposure-judg
 
 ### 6.3 容器运行与输出
 
-为本局准备隔离网络。部署时配置当期每方的 CPU 和内存规格，以及整局超时。同局双方使用相同规格、互不共享的计算资源，资源规格在同一赛段内保持一致。
+Arena 为本局准备隔离网络，并为双方分别启动一个 Bot 容器。每个容器运行该方的 HTTP 服务。部署时配置当期每方的 CPU 和内存规格，以及整局超时。同局双方使用相同规格、互不共享的计算资源，资源规格在同一赛段内保持一致。
 
-裁判请求带 `X-Arena-Protocol: 1`，使用官方 Bot 入口提供的以下 HTTP 接口。Bot 请求路径中的 `match_id` 由裁判为各出生点分别生成。裁判写出的 `/out/result.json` 中的 `match_id` 为任务的完整 `run_id`，按此核对输出归属。
+Bot HTTP 接口通过路径前缀 `/v1` 标明协议版本。裁判分别向两个 Bot 地址发送请求，路径均使用任务的完整 `run_id`，含尝试后缀。每个 Bot 服务按 `run_id` 保存对局状态。裁判在 `/out/result.json` 中原样写入任务的 `run_id`，供 Arena 和 Contest 核对归档归属。
 
 | 方法与路径 | 时限与处理 |
 | --- | --- |
 | `GET /v1/health` | 启动后 10 秒内返回 `200`，且 JSON 的 `ready` 为 `true`。未就绪触发技术判负 |
-| `POST /v1/matches/{match_id}/init` | 2 秒内返回 2xx，超时或失败记 1 次错误 |
-| `POST /v1/matches/{match_id}/turns/{turn}` | 200 毫秒内返回 `200` 和当前回合的 `turn`、`cmd`。超时、格式无效或连接失败记 1 次错误 |
-| `POST /v1/matches/{match_id}/end` | 时限 1 秒，超时或失败维持已确定的结果 |
+| `POST /v1/matches/{run_id}/init` | 2 秒内返回 2xx，超时或失败记 1 次错误 |
+| `POST /v1/matches/{run_id}/turns/{turn}` | 200 毫秒内返回 `200` 和当前回合的 `turn`、`cmd`。超时、格式无效或连接失败记 1 次错误 |
+| `POST /v1/matches/{run_id}/end` | 时限 1 秒，超时或失败维持已确定的结果 |
+
+决赛回合消息包含 `latent` 倒计时网格和 `latent_regions`。`latent_regions` 将潜像区域编号映射到其格子下标数组，下标为 `y * size + x`。Python SDK 同时使用两个字段恢复潜像，以便模拟显影和整块作废。
 
 本局累计 10 次错误或 Bot 自身退出均触发技术判负，因自身内存超限被终止按退出处理。由平台导致的容器启动失败或运行条件故障按第 3.3 节报告 `platform_error`。
 
@@ -373,4 +379,4 @@ docker run --rm --network arena-run-7001-2 \
 {"exit_code": 137, "oom": true}
 ```
 
-裁判退出码为 `0` 且 `/out/result.json`、`/out/replay.json`、`/out/log.jsonl` 齐全时，按第 5 章生成并发布 `finished` 归档。整局运行超时将执行记为 `platform_error`，原因填 `wall_timeout`。其余裁判异常退出或缺少必需输出的情况使用 `judge_crash`。
+裁判退出码为 `0`、`/out/result.json`、`/out/replay.json`、`/out/log.jsonl` 齐全且通过第 5.1 节的执行编号核对后，按第 5 章生成并发布 `finished` 归档。整局运行超时将执行记为 `platform_error`，原因填 `wall_timeout`。其余裁判异常退出或缺少有效输出的情况使用 `judge_crash`。

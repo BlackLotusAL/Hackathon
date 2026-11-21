@@ -5,9 +5,8 @@ from pathlib import Path
 
 from engine.protocol import dumps
 
-from .application import Contest
 from .config import Settings
-from .server import serve
+from .server import Contest, serve
 
 
 def main(argv=None):
@@ -22,6 +21,9 @@ def main(argv=None):
     server.add_argument('--host', help='覆盖配置中的监听 IP，默认 0.0.0.0')
     server.add_argument('--port', type=int, help='覆盖配置中的端口，默认 8082')
     commands.add_parser('show', help='查看一场对决的结算及执行尝试').add_argument('duel_id')
+    submissions = commands.add_parser('ladder-submissions', help='按双方编号和受理时间查询 Portal 对决')
+    submissions.add_argument('sides', nargs=2, metavar='参赛方')
+    submissions.add_argument('--since', required=True, metavar='时间')
     commands.add_parser('recheck', help='重新复核暂缓生效的执行').add_argument('run_id')
     commands.add_parser('retry', help='为已作废的预定局创建下一次尝试').add_argument('run_id')
     commands.add_parser('resend', help='按原内容补发未确认的 Arena 执行请求').add_argument('run_id')
@@ -49,6 +51,8 @@ def main(argv=None):
             contest = Contest(settings.db)
             if args.action == 'show':
                 print(dumps(contest.duels.show(args.duel_id)))
+            elif args.action == 'ladder-submissions':
+                print(dumps(contest.duels.ladder_submissions(args.sides, args.since)))
             elif args.action == 'retry':
                 print(contest.runs.retry(args.run_id))
             elif args.action == 'recheck':

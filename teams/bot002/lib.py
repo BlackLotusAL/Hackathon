@@ -1,5 +1,5 @@
 """工具函数：最短路、对手到达时间、闭合收益、矩形候选路线。bot002 和 bot003 目录各有一份相同的拷贝。"""
-from game_core.rules import DIRS, DX, DY, OPP, PARAMS
+from engine.rules import DIRS, DX, DY, OPP, PARAMS
 
 INF = 10 ** 9
 PERP = {'U': ('L', 'R'), 'D': ('L', 'R'), 'L': ('U', 'D'), 'R': ('U', 'D')}

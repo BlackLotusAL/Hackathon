@@ -1,0 +1,30 @@
+{
+  "prelim": [
+    {
+      "file": "../maps/prelim/P01.json",
+      "sha256": "02669a7a7b1883bea36ac2a146bcabf88f424d57e67f225ca4299772bbb7e26f"
+    },
+    {
+      "file": "../maps/prelim/P02.json",
+      "sha256": "36c9922577311e7492f5a7d4c35ec3c808be33e75e92cb244d2c1d27c1f257ea"
+    },
+    {
+      "file": "../maps/prelim/P03.json",
+      "sha256": "85353e0fbc40236f227bbff38676dad46301b91d7066eae7bed2e0918a4e5f67"
+    }
+  ],
+  "final": [
+    {
+      "file": "../maps/final/F01.json",
+      "sha256": "390c403e2a21f56618cee38cbf3bf11d94b9173f74e15bd13e57706f4c70279f"
+    },
+    {
+      "file": "../maps/final/F02.json",
+      "sha256": "f2293f21b82f5ce3bf1957aeeadda642c9618bd879b5e9042b7b72f2a9116215"
+    },
+    {
+      "file": "../maps/final/F03.json",
+      "sha256": "4218d1152d3003fec96836a134fb7eb242b9fb00ff88b24e1444b57863eec1c2"
+    }
+  ]
+}

@@ -3,12 +3,13 @@
 字段定义见 docs/BOT-API.md。
 """
 import json
+import re
 
 from .core import DX
 
-VERSION = '1'
 MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 16384
+RUN_ID = re.compile(r'run-[0-9]+\.[1-9][0-9]*')
 
 
 def json_object(body):
@@ -58,6 +59,15 @@ def latent_rows(game):
     return rows
 
 
+def latent_region_cells(game):
+    """Group active latent cells by their region ID in row-major order."""
+    groups = {}
+    for cell, region in enumerate(game.lat):
+        if region:
+            groups.setdefault(region, []).append(cell)
+    return groups
+
+
 def turn_message(game):
     own, con = grid_rows(game)
     o = game.order
@@ -73,6 +83,7 @@ def turn_message(game):
     }
     if game.final:
         msg['latent'] = latent_rows(game)
+        msg['latent_regions'] = latent_region_cells(game)
     return msg
 
 

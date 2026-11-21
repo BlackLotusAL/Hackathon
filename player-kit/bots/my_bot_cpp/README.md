@@ -1,11 +1,11 @@
 # C++ 策略模板
 
-在 `strategy.hpp` 中实现 `Strategy`。新增源码时，在 `CMakeLists.txt` 中用 `target_sources(bot PRIVATE ...)` 登记。
+在 `strategy.hpp` 中实现 `Strategy`，包含 `bot_sdk.hpp` 并使用 `bot_sdk::` 命名空间下的状态类型。新增源码时，在 `CMakeLists.txt` 中用 `target_sources(bot PRIVATE ...)` 登记。
 
-准备 Python 3.9 或以上版本、Docker 和 Buildx，首次构建需要基础镜像和 CMake 依赖。可用 `ARENA_CMAKE_INDEX_URL` 指定依赖源。在包含 `exposure.py` 的材料包根目录运行自检。
+使用 Python 3.9 或以上版本、CMake 3.16 或以上版本和支持 C++17 的本机编译工具链。把 `cmake` 和编译工具加入 PATH。Windows 使用 MinGW 时，工具链需包含 `g++` 和 `mingw32-make`。从材料包根目录试打。
 
 ```sh
-python -m exposure check bots/my_bot_cpp
+python -m engine bots/my_bot_cpp
 ```
 
-提交时将模板内容放到本队仓库根目录，保留 `bot.json`、`README.md`、`strategy.hpp`、`CMakeLists.txt`。在 README 说明策略、依赖和代码来源，以实际提交目录自检后推送到 `main`。
+提交时将模板内容放到本队仓库根目录，保留 `bot.json`、`README.md`、`strategy.hpp`、`CMakeLists.txt`。在 README 说明策略、依赖和代码来源，以实际提交目录试打后推送到 `main`。

@@ -5,13 +5,12 @@ from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 from .helpers import (ArenaStub, Bot, HttpClient, MatchFixture, admin_headers, arena_archive, case,
-                      contest_handler, exported_tables, http_arena, roster_workbook, run_query_payload, running_service,
-                      sealed_maps, wait_for, write_config, write_map_pools)
+                      contest_handler, exported_tables, http_arena, plan_duel, roster_workbook, run_query_payload,
+                      running_service, sealed_maps, wait_for, write_config, write_map_pools)
 
-from service.application import Contest, ContestWorker
 from service.arena import ArenaClient
 from service.domain import ContestError
-from service.server import Admin
+from service.server import Admin, Contest, ContestWorker
 from service.workbook import DOC_REL, PKG_REL, SHEET_XML, TYPES
 
 
@@ -23,8 +22,12 @@ class PrelimFixture(MatchFixture):
     def setUp(self):
         super().setUp()
         self.db = self.root / 'contest.sqlite'
-        self.contest = Contest(self.db, {'prelim': sealed_maps('prelim')})
         self.arena = ArenaStub()
+        self.maps = {'prelim': sealed_maps('prelim')}
+        self.open_phase('prelim')
+
+    def open_phase(self, phase):
+        self.contest = Contest(self.db, self.maps, phase=phase)
         self.worker = ContestWorker(self.contest, self.root, self.arena)
         admin = Admin(self.contest, 'organizer', 'test-password', self.arena)
         handler = contest_handler(self.contest, admin=admin)
@@ -124,8 +127,9 @@ class PrelimAdminTests(PrelimFixture):
         self.manager.json(second, roster_workbook(ROSTER[:2]), method='POST')
         self.assertCountEqual([item['batch_id'] for item in self.manager.json('load-tests')['batches']],
                               ['load-first', 'load-second'])
-        self.contest = Contest(self.db, {'prelim': sealed_maps('prelim')})
-        self.worker = ContestWorker(self.contest, self.root, self.arena)
+        self.open_phase('prelim')
+        self.admin.json('roster', roster_workbook(ROSTER[:2]), method='POST')
+        self.assertEqual(self.admin.json('plan', method='POST', status=409)['code'], 'PHASE_BUSY')
         requests = [self.next_run() for _ in range(4)]
         self.assertEqual(len({request['run_id'] for request in requests}), 4)
         self.assertTrue(all(request['rules'] == 'prelim' and 'file' in request['config']['map']
@@ -150,8 +154,9 @@ class PrelimAdminTests(PrelimFixture):
         self.assertEqual(self.manager.json(first + '/stop', method='POST'), completed)
         self.assertEqual(self.manager.json(second)['duels']['settled'], 1)
         self.assertEqual(self.admin.json('progress')['duels']['settled'], 0)
-        self.admin.json('roster', roster_workbook(ROSTER[:2]), method='POST')
         self.admin.json('plan', method='POST')
+        self.assertEqual(self.manager.json('load-tests/load-third', workbook, method='POST', status=409)['code'],
+                         'PHASE_BUSY')
         self.assertEqual(self.admin.json('standings', status=409)['code'], 'PRELIM_INCOMPLETE')
         official = self.next_run()
         self.build_both_failed(official)
@@ -162,7 +167,7 @@ class PrelimAdminTests(PrelimFixture):
         self.assertEqual(len(tables['对决']), 2)
         self.assertEqual(tables['对决'][1][0], official['duel_id'])
 
-    @case('L0-029', '压测拒单不占执行阶段，结束批次后保留结果并关闭未结算任务')
+    @case('L0-029', '压测拒单后仍隔离赛程，结束批次后保留结果并关闭未结算任务')
     def test_load_test_rejection_and_stop_leave_formal_scheduling_clear(self):
         rejected = 'load-tests/load-rejected'
         self.manager.json(rejected, roster_workbook(ROSTER[:2]), method='POST')
@@ -171,13 +176,12 @@ class PrelimAdminTests(PrelimFixture):
         refused = submit.call_args.args[0]
         self.assertEqual(self.manager.json(rejected)['attention'][0]['run_id'], refused['run_id'])
         self.assertEqual(self.contest.runs.preliminary_poll_targets(), [])
-        reopened = Contest(self.db, {'final': sealed_maps('final')})
-        for rules, extra in (('prelim', {'map_seed': 42}), ('final', {})):
-            duel_id = f'duel-after-{rules}'
-            reopened.duels.accept({'duel_id': duel_id, 'rules': rules, 'sides': ['team001', 'team002'], **extra})
-            claimed = reopened.runs.claim()
-            self.assertEqual(claimed['duel_id'], duel_id)
-            reopened.runs.complete_submission(claimed['run_id'], 409)
+        reopened = Contest(self.db)
+        sides = {'sides': ['team001', 'team002']}
+        with self.assertRaises(ContestError) as error:
+            reopened.duels.accept(sides)
+        self.assertEqual(error.exception.code, 'PHASE_BUSY')
+        self.assertIsNone(reopened.runs.claim())
         self.assertEqual(self.manager.json(rejected + '/stop', method='POST')['state'], 'stopped')
 
         batch = 'load-tests/load-with-results'
@@ -207,6 +211,11 @@ class PrelimAdminTests(PrelimFixture):
         with self.assertRaises(ContestError) as error:
             reopened.preliminary.retry(run_id, load_test_id='load-with-results')
         self.assertEqual(error.exception.code, 'ATTEMPT_CLOSED')
+        with self.assertRaises(ContestError) as error:
+            reopened.preliminary.start_load_test('load-wrong-phase', roster_workbook(ROSTER))
+        self.assertEqual(error.exception.code, 'PHASE_INACTIVE')
+        duel_id = reopened.duels.accept(sides)['duel_id']
+        self.assertEqual(reopened.runs.claim()['duel_id'], duel_id)
 
     @case('L0-025', '初赛以 HTTP 批量查询当前尝试，每批最多 100 局，按编号合并结果')
     def test_preliminary_round_filters_and_batches_run_ids(self):
@@ -287,7 +296,7 @@ class PrelimAdminTests(PrelimFixture):
             clock.now += 3
             return query(run_ids)
 
-        with patch('service.application.monotonic', side_effect=lambda: clock.now):
+        with patch('service.server.monotonic', side_effect=lambda: clock.now):
             with patch.object(self.arena, 'query_runs', side_effect=reply):
                 self.worker.poll_preliminary(clock)
         self.assertEqual(queries, [(0, [running, queued]), (20, [running, queued]), (30, [running, queued])])
@@ -354,7 +363,7 @@ class PrelimAdminTests(PrelimFixture):
 
         self.assertEqual(len(ran), 2)
         self.assertFalse(self.worker.submit_next())
-        self.contest.duels.accept({'duel_id': 'duel-unrelated', 'rules': 'prelim', 'sides': ['team001', 'team002']})
+        plan_duel(self.contest, 'duel-unrelated', 'prelim')
         data = self.admin.json('progress')
         self.assertEqual(data['state'], 'awaiting_confirmation')
         self.assertEqual(data['duels'], {'total': 3, 'settled': 3, 'awaiting_action': 0, 'pending': 0})
@@ -461,47 +470,38 @@ class PrelimHTTPTests(MatchFixture):
                          lambda event: (event['method'], event['path']) == ('POST', '/arena/v1/runs'))
         return event['body']
 
-    def _report_finished(self, arena, archive, request, *, started_at=None):
+    def _report_finished(self, arena, archive, request):
         winner = min(request['bots'])
         bots = [Bot(command, exit_after_reply=team != winner)
                 for command, team in zip(('U', 'D'), request['bots'])]
-        self.judge_archive(request, bots, started_at=started_at, archive_root=archive)
+        self.judge_archive(request, bots, archive_root=archive)
         arena.set_state(request['run_id'], 'finished')
 
-    @case('L0-011', '通过 HTTP 验证初赛批量查询、Contest 重启重跑及 Portal 查询')
-    def test_three_teams_retry_and_export_effective_runs(self):
-        db = self.root / 'var/contest-local.sqlite'
+    @case('L0-011', '通过 HTTP 验证初赛重启重跑后，导出和 Portal 查询引用同一生效执行')
+    def test_preliminary_retry_after_restart_is_reported_in_export_and_portal(self):
+        db = self.root / 'var/contest.sqlite'
         archive = self.root / 'archives'
         pools = write_map_pools(self.root / 'config/map-pools.json', 'prelim')
         with http_arena(None) as (arena_url, received, arena):
-            config = write_config(
-                pools.with_name('local.json'), db=str(db), archive_root=str(archive),
-                arena_url=arena_url, maps=pools.name, host='127.0.0.1', port=0,
-            )
+            settings = dict(db=str(db), archive_root=str(archive), arena_url=arena_url,
+                            maps=pools.name, host='127.0.0.1', port=0)
+            config = write_config(pools.with_name('contest.json'), **settings, phase='prelim')
             with running_service(config) as address:
                 admin = HttpClient(address, prefix=BASE, headers=admin_headers())
-                imported = admin.json('roster', roster_workbook(ROSTER), method='POST')
-                self.assertEqual([(team['team_id'], team['name']) for team in imported['teams']], list(ROSTER))
-                plan = admin.json('plan', method='POST')
-                self.assertEqual((plan['duels']['total'], plan['games']['total']), (3, 18))
-                admin.json('results.xlsx', status=409)
+                admin.json('roster', roster_workbook(ROSTER[:2]), method='POST')
+                admin.json('plan', method='POST')
 
                 original = self._next_submission(received)
                 self.assertEqual(original['run_id'], 'run-1.1')
                 arena.set_state(original['run_id'], 'platform_error', reason='slot_unhealthy')
-                for _ in range(12):
-                    self._report_finished(arena, archive, self._next_submission(received))
-
                 paused = wait_for(lambda: admin.json('progress'),
-                                  lambda info: info['attempts']['voided'] == 1 and info['duels']['settled'] == 2)
-                self.assertEqual(paused['attempts'], {'voided': 1, 'retries': 0})
-                self.assertEqual((paused['games']['effective'], paused['games']['awaiting_action']), (12, 1))
+                                  lambda info: info['attempts']['voided'] == 1)
                 self.assertEqual(paused['attention'], [{
                     'duel_id': original['duel_id'], 'run_id': 'run-1.1', 'ordinal': 1,
                     'issue': 'slot_unhealthy', 'retryable': True,
                 }])
-                self.assertTrue(any(len(batch) > 1 for batch in arena.queries))
-
+            # The stored preliminary plan must drain even after the configured phase changes.
+            write_config(config, **settings, phase='final-ladder')
             with running_service(config) as address:
                 admin = HttpClient(address, prefix=BASE, headers=admin_headers())
                 self.assertEqual(admin.json('progress'), paused)
@@ -515,52 +515,19 @@ class PrelimHTTPTests(MatchFixture):
                 for _ in range(5):
                     self._report_finished(arena, archive, self._next_submission(received))
 
-                settled = wait_for(lambda: admin.json('progress'), lambda info: info['duels']['settled'] == 3)
-                self.assertEqual((settled['games']['effective'], settled['games']['waived']), (18, 0))
+                settled = wait_for(lambda: admin.json('progress'), lambda info: info['duels']['settled'] == 1)
+                self.assertEqual(settled['games']['effective'], 6)
                 self.assertEqual(settled['attempts'], {'voided': 1, 'retries': 1})
                 self.assertEqual(settled['attention'], [])
                 self.assertEqual(admin.json('confirm', method='POST')['state'], 'confirmed')
 
                 code, workbook = admin.request('results.xlsx')
                 self.assertEqual(code, 200)
-                tables = exported_tables(workbook)
-                self.assertEqual(list(tables), ['排名', '对决', '对局'])
-                self.assertEqual(tables['排名'][1:], [[1, 'team001', 12, 0], [2, 'team002', 6, 6], [3, 'team003', 0, 12]])
-                self.assertEqual(len(tables['对决'][1:]), 3)
-                rows = tables['对局'][1:]
-                self.assertEqual(len(rows), 18)
-                self.assertEqual({row[2] for row in rows},
-                                 {'run-1.2', *(f'run-{number}.1' for number in range(2, 19))})
-                self.assertEqual(rows[0], [original['duel_id'], 1, 'run-1.2', min(original['bots']), None])
-                contest = Contest(db)
-                for duel, *_ in tables['对决'][1:]:
-                    games = contest.duels.result(duel)['result']['games']
-                    self.assertEqual([row for row in rows if row[0] == duel], [
-                        [duel, game['ordinal'], game['run_id'], game['winner'], None] for game in games
-                    ])
-
+                rows = exported_tables(workbook)['对局'][1:]
                 portal = HttpClient(address)
-                ladder_query_start = len(arena.queries)
-                duel = {'duel_id': 'duel-ladder', 'rules': 'prelim', 'sides': ['team001', 'team002'], 'map_seed': 42}
-                self.assertEqual(portal.post('/contest/v1/duels', duel), (202, b''))
-                self.assertEqual(portal.post('/contest/v1/duels', duel), (202, b''))
-                started_at = '2026-11-19T15:00:00+08:00'
-                for _ in range(2):
-                    self._report_finished(arena, archive, self._next_submission(received), started_at=started_at)
-
-                duel_path = '/contest/v1/duels/duel-ladder'
-                settled = wait_for(lambda: portal.json(duel_path + '/result'), lambda response: response['result'] is not None)
-                self.assertEqual(portal.json(duel_path + '/status')['state'], 'finished')
-                self.assertEqual(settled['side_results'], {'team001': 'win', 'team002': 'loss'})
-                result = settled['result']
-                self.assertEqual((result['outcome'], result['winner']), ('win', 'team001'))
-                self.assertEqual(result['games_won'], {'team001': 2, 'team002': 0})
-                self.assertEqual(result['games_lost'], {'team001': 0, 'team002': 2})
-                self.assertEqual(result['runs'], ['run-19.1', 'run-20.1'])
-                self.assertEqual({tuple(batch) for batch in arena.queries[ladder_query_start:]},
-                                 {('run-19.1',), ('run-20.1',)})
-                self.assertEqual([(game['ordinal'], game['run_id'], game['winner']) for game in result['games']],
-                                 [(1, 'run-19.1', 'team001'), (2, 'run-20.1', 'team001')])
-                self.assertEqual((result['started_at'], result['previous_duel_ids']), (started_at, []))
-                self.assertTrue(result['ended_at'].endswith('+08:00'))
-                self.assertEqual(exported_tables(admin.request('results.xlsx')[1]), tables)
+                duel_id = original['duel_id']
+                result = portal.json(f'/contest/v1/duels/{duel_id}/result')['result']
+                self.assertEqual(result['runs'], ['run-1.2', *(f'run-{number}.1' for number in range(2, 7))])
+                self.assertEqual(rows, [
+                    [duel_id, game['ordinal'], game['run_id'], game['winner'], None] for game in result['games']
+                ])

@@ -5,8 +5,8 @@
 import os
 import random
 
-from game_core.rules import DIRS, DX, DY, OPP
-from backend.runtime.state import InitState, TurnState
+from engine.rules import DIRS, DX, DY, OPP
+from sdk import InitState, TurnState
 
 
 class Strategy:

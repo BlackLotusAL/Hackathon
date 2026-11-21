@@ -90,19 +90,6 @@
     <p id="ruling-detail" class="muted">正在读取待裁定场次</p>
     <p id="ruling-message" class="message" role="status"></p>
   </section>
-  <section aria-labelledby="forfeit-title">
-    <h2 id="forfeit-title">决赛资格判负</h2>
-    <form id="forfeit-form" hidden>
-      <label for="forfeit-duel">未结算的决赛场次</label>
-      <select id="forfeit-duel" required></select>
-      <label for="forfeit-defeated">判负队伍</label>
-      <select id="forfeit-defeated" required></select>
-      <label for="forfeit-reason">判负理由</label>
-      <input id="forfeit-reason" type="text" required>
-      <button id="forfeit-submit" type="submit">确认整场判负</button>
-    </form>
-    <p id="forfeit-message" class="message" role="status"></p>
-  </section>
   <section aria-labelledby="load-title">
     <h2 id="load-title">独立压测</h2>
     <form id="load-form">
@@ -136,7 +123,6 @@
   const base = '/admin/prelim';
   const loadTests = '/admin/load-tests';
   const rulings = '/admin/rulings';
-  const forfeits = '/admin/final/forfeits';
   const jsonType = 'application/json';
   const workbookType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
   const stateLabel = {
@@ -148,7 +134,6 @@
   let lastProgress;
   let rankingRequested = false;
   let pendingRulings = [];
-  let finalDuels = [];
   let selectedLoad = '';
 
   function pairs(id, values) {
@@ -275,35 +260,6 @@
     renderRulingSelection();
   }
 
-  function forfeitSelection() {
-    return finalDuels.find(duel => duel.duel_id === node('forfeit-duel').value);
-  }
-
-  function renderForfeitSelection() {
-    const duel = forfeitSelection();
-    const defeated = node('forfeit-defeated');
-    const previous = defeated.value;
-    defeated.replaceChildren(new Option('请选择队伍', ''));
-    if (duel) {
-      defeated.append(...duel.sides.map(side => new Option(side, side)), new Option('双方', 'both'));
-      defeated.value = previous === 'both' || duel.sides.includes(previous) ? previous : '';
-    }
-    defeated.disabled = !duel;
-    node('forfeit-submit').disabled = changing || !duel;
-  }
-
-  function renderFinalDuels(data) {
-    finalDuels = data.duels;
-    const select = node('forfeit-duel');
-    const previous = select.value;
-    select.replaceChildren(new Option('请选择场次', ''), ...finalDuels.map(duel =>
-      new Option(`${duel.duel_id} · ${duel.sides.join(' 对 ')}`, duel.duel_id)));
-    if (finalDuels.some(duel => duel.duel_id === previous)) select.value = previous;
-    else if (previous) node('forfeit-reason').value = '';
-    node('forfeit-form').hidden = finalDuels.length === 0;
-    renderForfeitSelection();
-  }
-
   async function renderLoadTests(data, current) {
     const selectable = data.batches.map(batch => batch.batch_id);
     if (!selectable.includes(selectedLoad)) selectedLoad = selectable[0] || '';
@@ -353,7 +309,6 @@
     await Promise.all([
       refreshSection(`${base}/progress`, render, 'message', current),
       refreshSection(rulings, renderRulings, 'ruling-message', current),
-      refreshSection(forfeits, renderFinalDuels, 'forfeit-message', current),
       refreshSection(loadTests, renderLoadTests, 'load-message', current)
     ]);
   }
@@ -390,7 +345,7 @@
     changing = true;
     ++version;
     if (lastProgress) render(lastProgress);
-    for (const id of ['load-start', 'load-stop', 'ruling-submit', 'forfeit-submit']) node(id).disabled = true;
+    for (const id of ['load-start', 'load-stop', 'ruling-submit']) node(id).disabled = true;
     const headers = {'X-Contest-Admin': '1'};
     if (contentType) headers['Content-Type'] = contentType;
     try {
@@ -429,21 +384,6 @@
       winner: node('ruling-winner').value, reason: node('ruling-reason').value};
     change(rulings, '已记录裁定', JSON.stringify(body), jsonType, {
       messageId: 'ruling-message', onSuccess: () => { node('ruling-reason').value = ''; }
-    });
-  });
-  node('forfeit-duel').addEventListener('change', () => {
-    node('forfeit-defeated').value = node('forfeit-reason').value = '';
-    renderForfeitSelection();
-  });
-  node('forfeit-form').addEventListener('submit', event => {
-    event.preventDefault();
-    const duel = forfeitSelection();
-    const selected = node('forfeit-defeated').value;
-    if (!duel || !selected) return;
-    const body = {duel_id: duel.duel_id, defeated: selected === 'both' ? duel.sides : [selected],
-      reason: node('forfeit-reason').value};
-    change(forfeits, '已记录决赛判负', JSON.stringify(body), jsonType, {
-      messageId: 'forfeit-message', onSuccess: () => { node('forfeit-reason').value = ''; }
     });
   });
   node('load-form').addEventListener('submit', event => {

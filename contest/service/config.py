@@ -7,6 +7,7 @@ from typing import Optional
 from engine.protocol import json_object
 
 from .arena import parse_peer_url
+from .domain import PHASES
 
 
 CONTEST_ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +51,7 @@ class Settings:
     db: Optional[Path] = None
     archive_root: Optional[Path] = None
     maps: Optional[Path] = None
+    phase: str = 'prelim-ladder'
     host: str = '0.0.0.0'
     port: int = 8082
     ip_whitelist: Optional[list[str]] = None
@@ -87,6 +89,8 @@ class Settings:
         return settings
 
     def validate(self):
+        if self.phase not in PHASES:
+            raise ValueError('配置 phase 须为 ' + '、'.join(PHASES))
         if type(self.port) is not int or not 0 <= self.port <= 65535:
             raise ValueError('配置 port 须为 0 至 65535 的整数')
         if not isinstance(self.host, str):

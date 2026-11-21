@@ -11,7 +11,7 @@ namespace baseline {
 
 class Planner {
 public:
-    Planner(const arena::InitState& init, bool search)
+    Planner(const bot_sdk::InitState& init, bool search)
         : init_(init), search_(search), unlimited_(std::getenv("ARENA_NO_BUDGET") != nullptr),
           terrain_(Board::flatten(init.terrain)), neighbors_(init.size * init.size),
           protected_(init.size * init.size) {
@@ -32,7 +32,7 @@ public:
         }
     }
 
-    std::string act(const arena::TurnState& turn) {
+    std::string act(const bot_sdk::TurnState& turn) {
         deadline_ = Clock::now() + std::chrono::milliseconds(search_ ? 100 : 80);
         const auto& me = turn.beams[init_.seat];
         if (!me.alive) {
@@ -127,7 +127,7 @@ private:
         bool risky = true;
     };
 
-    const arena::InitState init_;
+    const bot_sdk::InitState init_;
     bool search_;
     bool unlimited_;
     std::string terrain_;

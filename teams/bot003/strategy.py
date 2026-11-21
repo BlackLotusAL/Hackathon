@@ -4,8 +4,8 @@
 """
 import time
 
-from game_core.rules import DIRS, DX, DY, OPP, PARAMS      # noqa: E402
-from backend.runtime.state import TurnState
+from engine.rules import DIRS, DX, DY, OPP, PARAMS      # noqa: E402
+from sdk import TurnState
 from lib import INF, bfs, closure_gain  # noqa: E402
 from greedy import GreedyBot                 # noqa: E402
 

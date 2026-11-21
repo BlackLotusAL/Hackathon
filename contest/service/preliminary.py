@@ -5,9 +5,12 @@ import json
 import secrets
 from uuid import uuid4
 
-from .domain import DUEL_RULING_LABEL, DUEL_TIE_ISSUE, LOAD_TEST_ID, OFFICIAL_BATCH, TEAM_ID, ZONE, ContestError, encode
+from .arena import retry_attempt
+from .domain import (
+    DUEL_RULING_LABEL, DUEL_TIE_ISSUE, LOAD_TEST_ID, OFFICIAL_BATCH, TEAM_ID,
+    ZONE, ContestError, encode, require_phase,
+)
 from .duels import EffectiveGame, FORMAL_GAMES, forfeit_result, formal_maps, insert_plan, save_result
-from .executions import retry_attempt
 from .workbook import DUEL_HEADERS, GAME_HEADERS, RANK_HEADERS, WorkbookError, read_roster, write_workbook
 
 
@@ -236,8 +239,9 @@ def _game_rows(connection, batch_id, effective):
 
 
 class Preliminary:
-    def __init__(self, database, maps):
+    def __init__(self, database, maps, phase):
         self.database, self.maps = database, maps
+        self.phase = phase
 
     def import_roster(self, data):
         teams = _read_teams(data)
@@ -259,6 +263,7 @@ class Preliminary:
             if batch is None:
                 raise ContestError(409, 'ROSTER_REQUIRED', '请先导入截止时的参赛名单')
             if batch['planned_at'] is None:
+                require_phase(connection, self.phase, 'prelim')
                 _plan_batch(connection, batch, self.maps)
             return _progress(connection)
 
@@ -282,6 +287,7 @@ class Preliminary:
         with self.database.transaction() as connection:
             batch = _batch(connection, batch_id)
             if batch is None:
+                require_phase(connection, self.phase, 'prelim', load_test=True)
                 connection.execute('INSERT INTO prelim_batches (batch_id, roster) VALUES (?, ?)',
                                    (batch_id, encode(teams)))
                 _plan_batch(connection, _batch(connection, batch_id), self.maps)

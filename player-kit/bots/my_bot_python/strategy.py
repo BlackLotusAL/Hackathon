@@ -1,6 +1,6 @@
 """Python 策略示例。修改 Strategy.act 来选择每回合的命令。"""
-from game_core.rules import DIRS, OPP
-from backend.runtime.state import InitState, TurnState
+from engine.rules import DIRS, OPP
+from sdk import InitState, TurnState
 
 
 LEFT = {'U': 'L', 'L': 'D', 'D': 'R', 'R': 'U'}

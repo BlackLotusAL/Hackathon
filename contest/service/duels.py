@@ -1,14 +1,19 @@
-"""Duel planning, settlement and Portal queries."""
+"""Duel planning, settlement, rulings and Portal queries."""
 from datetime import datetime, timedelta
 import json
 import secrets
 from typing import NamedTuple, Optional
+from uuid import uuid4
 
 from engine.core import TIEBREAK_METRICS, compare_metrics
 from engine.mapgen import load_map
-from engine.protocol import json_object
+from engine.protocol import RUN_ID, json_object
 
-from .domain import BASELINES, DUEL_ID, DUEL_TIE_ISSUE, OFFICIAL_BATCH, TEAM_ID, ZONE, ContestError, encode
+from .domain import (
+    BASELINES, DUEL_ID, DUEL_RULING_LABEL, DUEL_TIE_ISSUE, OFFICIAL_BATCH,
+    PORTAL_DUEL_RULES, TEAM_ID, ZONE, ContestError, encode, require_phase,
+)
+from .workbook import fits_text_cell
 
 
 FORMAL_MAPS = 3
@@ -17,11 +22,13 @@ FORMAL_GAMES = FORMAL_MAPS * 2
 
 
 def load_pools(path):
-    """Load the sealed map files and check their published SHA-256 values."""
-    result = {}
+    """Load sealed map pools and verify their published hashes."""
     pools = json_object(path.read_bytes()) if path else {}
+    result = {}
     for stage, entries in pools.items():
-        if stage not in ('prelim', 'final') or not isinstance(entries, list) or len(entries) != FORMAL_MAPS:
+        if stage not in ('prelim', 'final'):
+            raise ValueError('地图池配置包含未知赛段')
+        if not isinstance(entries, list) or len(entries) != FORMAL_MAPS:
             raise ValueError('每个正式地图池必须包含三张地图')
         specs, ids = [], set()
         for entry in entries:
@@ -43,18 +50,17 @@ def formal_maps(pools, stage):
     return maps
 
 
-def _duel_kind(body):
-    rules, sides = body.get('rules'), body.get('sides')
-    if rules not in ('prelim', 'final'):
-        raise ContestError(400, 'INVALID_DUEL', '对决编号或赛段无效')
-    if (not isinstance(sides, list) or len(sides) != 2 or sides[0] == sides[1]
-            or any(not isinstance(team, str) or (not TEAM_ID.fullmatch(team) and team not in BASELINES) for team in sides)):
+def _sides(body, *, allow_baseline=True):
+    if not isinstance(body, dict) or body.keys() != {'sides'}:
+        raise ContestError(400, 'INVALID_DUEL', '请求体须只包含 sides')
+    sides = body['sides']
+    if not isinstance(sides, list) or len(sides) != 2 or not all(isinstance(side, str) for side in sides):
+        raise ContestError(400, 'INVALID_DUEL', 'sides 须包含两个编号')
+    team, opponent = sides
+    valid_opponent = TEAM_ID.fullmatch(opponent) or (allow_baseline and opponent in BASELINES)
+    if team == opponent or not TEAM_ID.fullmatch(team) or not valid_opponent:
         raise ContestError(400, 'INVALID_DUEL', '双方编号无效')
-    selector = body.get('map_seed', rules)
-    ladder = type(selector) is int or selector == 'random'
-    if (not ladder and selector != rules) or sum(team in BASELINES for team in sides) > int(ladder):
-        raise ContestError(400, 'INVALID_DUEL', '地图选择或参赛方不适用于本场')
-    return f'{rules}-ladder' if ladder else rules
+    return sides
 
 
 def insert_attempt(connection, game, attempt):
@@ -63,13 +69,15 @@ def insert_attempt(connection, game, attempt):
     return run_id
 
 
-def insert_plan(connection, kind, body, maps, *, batch_id=None):
+def insert_plan(connection, kind, body, maps, *, batch_id=None, first_bots=None):
     """Persist the duel, its immutable game plan and the first attempts together."""
     duel = connection.execute(
-        'INSERT INTO duels (duel_id, submission, kind, batch_id) VALUES (?, ?, ?, ?)',
-        (body['duel_id'], encode(body), kind, batch_id),
+        'INSERT INTO duels (duel_id, submission, kind, batch_id, accepted_at) VALUES (?, ?, ?, ?, ?)',
+        (body['duel_id'], encode(body), kind, batch_id, datetime.now(ZONE).isoformat(timespec='microseconds')),
     ).lastrowid
-    sides = (encode(body['sides']), encode(body['sides'][::-1]))
+    if first_bots is None:
+        first_bots = body['sides']
+    sides = (encode(first_bots), encode(first_bots[::-1]))
     ordinal = 0
     for spec in maps:
         map_payload = encode(spec)
@@ -138,10 +146,6 @@ def _game_results(connection, duel, run_ids):
             if row['review'] == 'effective' and row['run_id'] in effective_ids]
 
 
-def effective_run_ids(connection, duel):
-    return [row['run_id'] for row in _reviewed_attempts(connection, duel) if row['review'] == 'effective']
-
-
 def _previous_duel_ids(connection, duel, sides):
     """Return each side's closest earlier settlement in the same ladder."""
     remaining = set(sides)
@@ -161,31 +165,42 @@ def _previous_duel_ids(connection, duel, sides):
 
 
 class DuelService:
-    def __init__(self, database, maps):
-        self.database, self.maps = database, maps
+    def __init__(self, database, maps, phase):
+        self.database, self.maps, self.phase = database, maps, phase
 
     def accept(self, body):
-        duel_id = body.get('duel_id')
-        _validate_duel_id(duel_id)
-        try:
-            submission = encode(body)
-        except ValueError as error:
-            raise ContestError(400, 'INVALID_DUEL', '请求含无效 JSON 数值') from error
+        fixed_maps = self.phase == 'final'
+        sides = _sides(body, allow_baseline=not fixed_maps)
         with self.database.transaction() as connection:
-            existing = connection.execute(
-                'SELECT submission, batch_id FROM duels WHERE duel_id = ?', (duel_id,),
-            ).fetchone()
-            if existing is not None:
-                if existing['batch_id'] in (None, OFFICIAL_BATCH) and existing['submission'] == submission:
-                    return
-                raise ContestError(409, 'DUEL_CONFLICT', '同一对决编号的请求内容冲突')
-            kind = _duel_kind(body)
-            if kind.endswith('-ladder'):
-                seed = body['map_seed']
-                maps = [{'seed': secrets.randbelow(999999) + 1 if seed == 'random' else seed}]
-            else:
-                maps = formal_maps(self.maps, body['rules'])
-            insert_plan(connection, kind, body, maps)
+            require_phase(connection, self.phase, *PORTAL_DUEL_RULES)
+            rules = PORTAL_DUEL_RULES[self.phase]
+            maps = formal_maps(self.maps, rules) if fixed_maps else [{'seed': secrets.randbelow(999999) + 1}]
+            duel_id = f'duel-{uuid4().hex}'
+            plan = {'duel_id': duel_id, 'rules': rules, 'sides': sides}
+            first_bots = sides[::-1] if secrets.randbelow(2) else sides
+            insert_plan(connection, self.phase, plan, maps, first_bots=first_bots)
+        return {'duel_id': duel_id}
+
+    def ladder_submissions(self, sides, since):
+        sides = _sides({'sides': sides})
+        try:
+            when = datetime.fromisoformat(since)
+            if when.utcoffset() is None:
+                raise ValueError('timezone missing')
+            cutoff = when.astimezone(ZONE).isoformat(timespec='microseconds')
+        except (ValueError, OverflowError) as error:
+            raise ValueError('--since 须为包含时区的 ISO 8601 时间') from error
+        placeholders = ', '.join('?' for _ in PORTAL_DUEL_RULES)
+        with self.database.transaction(write=False) as connection:
+            rows = connection.execute(f"""
+                SELECT duel_id, submission, accepted_at FROM duels
+                WHERE kind IN ({placeholders}) AND accepted_at >= ?
+                ORDER BY accepted_at, id
+            """, (*PORTAL_DUEL_RULES, cutoff))
+            return {'duels': [
+                {'duel_id': row['duel_id'], 'accepted_at': row['accepted_at'], 'sides': sides}
+                for row in rows if json.loads(row['submission'])['sides'] == sides
+            ]}
 
     def status(self, duel_id):
         with self.database.transaction(write=False) as connection:
@@ -313,3 +328,95 @@ def settle_duel(connection, duel_id, *, ruling=None):
             ended = max(ended, latest + timedelta(microseconds=1))
         result.update(started_at=duel['started_at'], ended_at=ended.isoformat(timespec='microseconds'))
     save_result(connection, duel_id, result, ruling=ruling)
+
+
+def _require_run(connection, run_id):
+    if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
+        raise ContestError(400, 'INVALID_RUN_ID', '执行编号无效')
+    run = connection.execute('''
+        SELECT r.review, r.ruling, g.duel, g.bots, d.closed_at, c.run_id AS current_run
+        FROM runs r JOIN games g ON g.id = r.game JOIN duels d ON d.id = g.duel
+        JOIN current_runs c ON c.game = g.id WHERE r.run_id = ?
+    ''', (run_id,)).fetchone()
+    if run is None:
+        raise ContestError(404, 'RUN_NOT_FOUND', '执行不存在')
+    return run
+
+
+def _reason(value):
+    reason = value.strip() if isinstance(value, str) else ''
+    if not reason:
+        raise ContestError(400, 'INVALID_RULING', '请填写裁定理由')
+    return reason
+
+
+def _existing_ruling(item, **fields):
+    if item['ruling'] is not None:
+        existing = json.loads(item['ruling'])
+        if all(existing.get(key) == value for key, value in fields.items()):
+            return existing
+        raise ContestError(409, 'RULING_CONFLICT', '该场次已有不同的裁定')
+    return None
+
+
+def _decision(scope, target, reason, operator, **fields):
+    return {'scope': scope, 'target': target, 'reason': reason, 'operator': operator,
+            'decided_at': datetime.now(ZONE).isoformat(timespec='microseconds'), **fields}
+
+
+class Rulings:
+    def __init__(self, database):
+        self.database = database
+
+    def pending(self):
+        with self.database.transaction(write=False) as connection:
+            rows = connection.execute('''
+                SELECT d.id AS position, 0 AS ordinal, d.duel_id, d.kind, d.batch_id, d.submission,
+                       NULL AS run_id, ? AS issue
+                FROM duels d WHERE d.closed_at IS NULL AND d.awaiting_ruling = 1
+                UNION ALL
+                SELECT d.id, g.ordinal, d.duel_id, d.kind, d.batch_id, d.submission, r.run_id, r.issue
+                FROM duels d JOIN games g ON g.duel = d.id JOIN current_runs r ON r.game = g.id
+                WHERE d.closed_at IS NULL AND r.review = 'awaiting_ruling'
+                ORDER BY position, ordinal
+            ''', (DUEL_TIE_ISSUE,))
+            return {'pending': [
+                {'scope': 'game' if row['run_id'] else 'duel', 'duel_id': row['duel_id'],
+                 'run_id': row['run_id'], 'ordinal': row['ordinal'], 'kind': row['kind'],
+                 'batch_id': row['batch_id'], 'sides': json.loads(row['submission'])['sides'],
+                 'issue': row['issue']}
+                for row in rows
+            ]}
+
+    def record(self, scope, target, winner, reason, *, operator):
+        if scope not in ('game', 'duel') or not isinstance(winner, str):
+            raise ContestError(400, 'INVALID_RULING', '请选择裁定范围、胜方并填写理由')
+        reason = _reason(reason)
+        if not fits_text_cell(DUEL_RULING_LABEL.format(reason) if scope == 'duel' else reason):
+            raise ContestError(400, 'INVALID_RULING', '裁定理由须能写入 XLSX 文本单元格')
+        with self.database.transaction() as connection:
+            if scope == 'game':
+                item = _require_run(connection, target)
+                sides = json.loads(item['bots'])
+                pending = item['review'] == 'awaiting_ruling' and item['current_run'] == target
+            else:
+                item = require_duel(connection, target)
+                sides = json.loads(item['submission'])['sides']
+                pending = item['awaiting_ruling']
+            if winner not in sides:
+                raise ContestError(400, 'INVALID_RULING_WINNER', '裁定胜方必须是本场的参赛方')
+            existing = _existing_ruling(item, scope=scope, winner=winner, reason=reason)
+            if existing is not None:
+                return existing
+            if item['closed_at'] is not None or not pending:
+                raise ContestError(409, 'RULING_NOT_PENDING', '该场次当前没有待录入的裁定')
+            ruling = _decision(scope, target, reason, operator, winner=winner)
+            if scope == 'game':
+                connection.execute(
+                    "UPDATE runs SET ruling = ?, review = 'effective', issue = NULL WHERE run_id = ?",
+                    (encode(ruling), target),
+                )
+                settle_duel(connection, item['duel'])
+            else:
+                settle_duel(connection, item['id'], ruling=ruling)
+            return ruling

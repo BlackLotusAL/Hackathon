@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>曝光领地 · 本地回放</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f1f2ee;
+  --sheet: #fff;
+  --ink: #171a1d;
+  --muted: #565e65;
+  --line: #ced2cc;
+  --accent: #f2c224;
+  --cell: #e4e7e1;
+  --defect: #33383d;
+  --key: #91600a;
+  --blue: #244fc1;
+  --blue-field: #adc1f2;
+  --red: #b93328;
+  --red-field: #efb3a9;
+  --order: #13734c;
+  --boost: #7839b4;
+  --mono: "IBM Plex Mono", Consolas, monospace;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 15px/1.5 "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+}
+h1, h2, p { margin: 0; }
+button, select, input { font: inherit; color: inherit; }
+button, select { min-height: 40px; border: 1px solid var(--line); background: var(--sheet); }
+button { padding: 7px 12px; cursor: pointer; white-space: nowrap; }
+button.primary { border-color: var(--ink); background: var(--ink); color: var(--sheet); font-weight: 700; }
+button:not(:disabled):hover { border-color: var(--ink); background: var(--accent); color: var(--ink); }
+button:disabled, select:disabled, input:disabled { opacity: .52; cursor: default; }
+:focus-visible { outline: 3px solid #9e7300; outline-offset: 3px; }
+code, .numeric { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.masthead { border-bottom: 3px solid var(--ink); }
+.wrap { width: min(100% - 32px, 1040px); margin-inline: auto; }
+.masthead .wrap { min-height: 100px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 16px; }
+.brand { font-size: 13px; color: var(--muted); font-weight: 700; }
+h1 { font-size: clamp(27px, 4vw, 39px); line-height: 1.18; font-weight: 900; letter-spacing: -.035em; }
+.openers, .buttons, .speed { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#choose-folder { border-color: var(--ink); background: var(--accent); color: var(--ink); }
+#choose-folder:hover { background: #ffe17b; }
+.workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(268px, 318px); gap: 18px; align-items: start; padding-block: 22px; }
+.card { border: 1px solid var(--line); background: var(--sheet); min-width: 0; }
+.board-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+h2 { font-size: 15px; font-weight: 800; }
+.board-top h2 { overflow-wrap: anywhere; }
+.board-top .numeric { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.board-shell { padding: 12px; background: #f8f9f6; }
+canvas { display: block; width: 100%; aspect-ratio: 1; background: var(--line); }
+.board-shell > * { max-width: max(300px, calc(100svh - 226px)); margin-inline: auto; }
+.empty {
+  aspect-ratio: 1;
+  display: grid;
+  place-content: center;
+  gap: 8px;
+  padding: 18px;
+  text-align: center;
+  border: 1px solid var(--line);
+  background: repeating-linear-gradient(0deg, transparent 0 15px, #e8ebe5 15px 16px),
+              repeating-linear-gradient(90deg, #f8f9f6 0 15px, #e8ebe5 15px 16px);
+}
+.empty strong { font-size: clamp(19px, 3vw, 25px); }
+.controls { display: grid; gap: 10px; }
+.controls input { width: 100%; margin: 0; accent-color: var(--ink); }
+.control-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+#play { min-width: 67px; }
+.speed { font-size: 13px; }
+.speed select { padding-inline: 6px; }
+aside { display: grid; gap: 12px; }
+aside section { padding: 14px; }
+.file-label { display: block; font-size: 15px; font-weight: 800; margin-bottom: 7px; }
+#replay-list { width: 100%; min-width: 0; padding-inline: 8px; }
+.hint { color: var(--muted); font-size: 13px; }
+#file-status { margin-top: 8px; overflow-wrap: anywhere; }
+#file-status.error { color: var(--red); }
+.scores { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.side { min-width: 0; border: 1px solid var(--line); border-top: 3px solid var(--blue); padding: 7px 9px; }
+.side:last-child { border-top-color: var(--red); }
+.side b { display: block; overflow-wrap: anywhere; }
+.points { font-size: 24px; font-weight: 750; }
+.side small { display: block; color: var(--muted); }
+#result { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 9px; overflow-wrap: anywhere; font-size: 13px; }
+#events { margin: 7px 0 0; padding-left: 17px; font-size: 13px; overflow-wrap: anywhere; }
+#events li + li { margin-top: 4px; }
+.legend { display: flex; gap: 8px 12px; flex-wrap: wrap; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.legend span { display: flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 10px; background: var(--chip); display: inline-block; flex: none; }
+.legend .outline { border: 2px solid var(--blue); background: var(--cell); }
+.legend .order { border: 1px dashed var(--order); background: transparent; }
+.legend .boost { transform: rotate(45deg) scale(.8); }
+.legend .latent { background: var(--blue-field); border: 2px solid var(--blue-field); box-shadow: inset 0 0 0 3px var(--sheet); }
+@media (max-width: 760px) {
+  .workspace { grid-template-columns: minmax(0, 1fr); gap: 12px; padding-block: 15px; }
+  .files-card { grid-row: 1; }
+  .controls { grid-row: 2; }
+  .board-shell > * { max-width: none; }
+  aside { display: contents; }
+}
+@media (max-width: 440px) {
+  .wrap { width: calc(100% - 20px); }
+  .masthead .wrap { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .board-shell { padding: 7px; }
+  .board-top { padding-inline: 10px; }
+}
+</style>
+</head>
+<body>
+<header class="masthead">
+  <div class="wrap">
+    <div><p class="brand">曝光领地</p><h1>本地回放</h1></div>
+    <div class="openers">
+      <button type="button" id="choose-folder">选择回放文件夹</button>
+      <button type="button" id="choose-files">打开 JSON</button>
+      <input type="file" id="folder-input" webkitdirectory multiple hidden>
+      <input type="file" id="files-input" accept=".json,application/json" multiple hidden>
+    </div>
+  </div>
+</header>
+<main class="workspace wrap">
+  <section class="card" aria-labelledby="map-title">
+    <header class="board-top">
+      <h2 id="map-title">基板</h2>
+      <span id="turn-label" class="numeric">未加载</span>
+    </header>
+    <div class="board-shell">
+      <canvas id="board" role="img" aria-label="对局基板" hidden></canvas>
+      <div class="empty" id="empty">
+        <strong>暂无回放画面</strong>
+        <p class="hint">也可选择回放文件夹或打开 JSON。</p>
+      </div>
+    </div>
+  </section>
+  <aside aria-label="对局信息">
+    <section class="card files-card">
+      <label class="file-label" for="replay-list">回放文件</label>
+      <select id="replay-list" disabled><option>正在加载回放…</option></select>
+      <p id="file-status" class="hint" role="status"></p>
+    </section>
+    <section class="card controls" aria-label="播放回放">
+      <input type="range" id="timeline" min="0" max="0" value="0" aria-label="跳到回合" disabled>
+      <div class="control-row">
+        <div class="buttons" role="group" aria-label="播放控制">
+          <button type="button" id="previous" disabled>上一回合</button>
+          <button type="button" id="play" class="primary" disabled>播放</button>
+          <button type="button" id="next" disabled>下一回合</button>
+        </div>
+        <label class="speed">速度
+          <select id="speed" disabled>
+            <option value="4">4 回合/秒</option>
+            <option value="12" selected>12 回合/秒</option>
+            <option value="24">24 回合/秒</option>
+          </select>
+        </label>
+      </div>
+    </section>
+    <section class="card" id="score-card" aria-label="对局比分" hidden>
+      <div class="scores">
+        <div class="side"><b id="name-0"></b><strong class="points numeric" id="score-0"></strong><small id="bonus-0"></small><small id="command-0"></small></div>
+        <div class="side"><b id="name-1"></b><strong class="points numeric" id="score-1"></strong><small id="bonus-1"></small><small id="command-1"></small></div>
+      </div>
+      <p id="result"></p>
+    </section>
+    <section class="card" id="event-card" hidden>
+      <h2>本回合事件</h2>
+      <ul id="events"></ul>
+    </section>
+    <section class="card" id="legend-card" hidden>
+      <h2>图例</h2>
+      <div class="legend">
+        <span><i style="--chip:var(--blue-field)"></i>蓝方区域</span>
+        <span><i style="--chip:var(--red-field)"></i>红方区域</span>
+        <span><i class="outline"></i>轮廓</span>
+        <span><i style="--chip:var(--defect)"></i>缺陷</span>
+        <span><i style="--chip:var(--key)"></i>关键格</span>
+        <span><i class="order"></i>订单</span>
+        <span><i class="boost" style="--chip:var(--boost)"></i>加速道具</span>
+        <span id="latent-legend" hidden><i class="latent"></i>潜像</span>
+      </div>
+    </section>
+  </aside>
+</main>
+<script src="./replays/index.js"></script>
+<script>
+(() => {
+  'use strict';
+  const byId = id => document.getElementById(id);
+  const canvas = byId('board');
+  const ctx = canvas.getContext('2d');
+  const list = byId('replay-list');
+  const status = byId('file-status');
+  const timeline = byId('timeline');
+  const play = byId('play');
+  const previous = byId('previous');
+  const next = byId('next');
+  const speed = byId('speed');
+  const cellSize = 16;
+  const style = getComputedStyle(document.documentElement);
+  const color = name => style.getPropertyValue('--' + name).trim();
+  const field = [color('blue-field'), color('red-field')];
+  const team = [color('blue'), color('red')];
+  const paint = { line: color('line'), cell: color('cell'), defect: color('defect'), key: color('key'),
+    order: color('order'), boost: color('boost'), sheet: color('sheet') };
+  const directions = new Map([
+    ['U', [0, -1, '↑']], ['D', [0, 1, '↓']], ['L', [-1, 0, '←']], ['R', [1, 0, '→']]
+  ]);
+  const reasons = { limit: '得分', bonus: '订单奖励', lead_turns: '领先回合数', time: '累计响应时间',
+    tie: '四项指标相同', startup: 'Bot 未就绪', crash: 'Bot 退出', errors: '累计错误达到上限' };
+  const eventNames = new Map(Object.entries({
+    close: '闭合轮廓', enclose: '围困', cut: '轮廓被切断', selfcut: '扫过自身轮廓', collide: '束斑相撞',
+    crash: '碰撞缺陷或边界', down: '束斑失效', respawn: '束斑恢复', void: '潜像被清除',
+    develop: '潜像显影', decay: '区域衰减', orderspawn: '订单公示', orderexpire: '订单到期',
+    boostannounce: '加速道具预告', boostspawn: '加速道具出现', boostgone: '加速道具消失',
+    pickup: '拾取加速道具', end: '对局结束'
+  }));
+  const sides = [0, 1].map(seat => ({
+    name: byId('name-' + seat), score: byId('score-' + seat),
+    bonus: byId('bonus-' + seat), command: byId('command-' + seat)
+  }));
+  let files = [];
+  let request = 0;
+  let replay = null;
+  let terrain = '';
+  let layers = [];
+  let turn = 0;
+  let timer = null;
+
+  function validate(data) {
+    if (data?.format !== 'match-replay/2') throw new Error('请选择试打生成的回放 JSON。');
+    const { map, init, players, frames, result } = data;
+    const size = map?.size;
+    if (!Number.isInteger(size) || size < 1 || size > 128 || !Array.isArray(map.terrain) ||
+        map.terrain.length !== size ||
+        !map.terrain.every(row => typeof row === 'string' && row.length === size && /^[.#*]+$/.test(row))) {
+      throw new Error('回放地图的尺寸或地形数据无效。');
+    }
+    const length = size * size;
+    const grid = value => typeof value === 'string' && value.length === length && /^[.01]+$/.test(value);
+    const latent = init?.latent;
+    if (!grid(init?.owner) || !grid(init?.contour) ||
+        (latent !== undefined && (typeof latent !== 'string' || latent.length !== length || !/^[.1-9]+$/.test(latent)))) {
+      throw new Error('回放的初始网格无效。');
+    }
+    const pair = value => Array.isArray(value) && value.length === 2;
+    const position = frame => pair(frame?.beams) && frame.beams.every(beam => beam && typeof beam.alive === 'boolean') &&
+      pair(frame.score) && frame.score.every(Number.isFinite) && pair(frame.bonus) && frame.bonus.every(Number.isFinite);
+    if (!pair(players) || !players.every(name => typeof name === 'string') || !position(init) ||
+        !Array.isArray(frames) || result?.turns !== frames.length || ![0, 1, null].includes(result.winner)) {
+      throw new Error('回放缺少双方状态或终局结果。');
+    }
+    for (const [index, frame] of frames.entries()) {
+      if (!position(frame) || frame.turn !== index + 1 || !Array.isArray(frame.d) || !frame.d.every(delta =>
+        Array.isArray(delta) && Number.isInteger(delta[0]) && delta[0] >= 0 && delta[0] < length &&
+        ['.', '0', '1'].includes(delta[1]) && ['.', '0', '1'].includes(delta[2]) &&
+        (latent === undefined || (typeof delta[3] === 'string' && /^[.1-9]$/.test(delta[3]))))) {
+        throw new Error('第 ' + (index + 1) + ' 回合的回放帧无效。');
+      }
+    }
+    return data;
+  }
+
+  function syncControls() {
+    const total = replay?.frames.length || 0;
+    timeline.max = total;
+    timeline.value = turn;
+    timeline.disabled = speed.disabled = play.disabled = total === 0;
+    previous.disabled = turn === 0;
+    next.disabled = turn >= total;
+    play.textContent = timer !== null ? '暂停' : total && turn === total ? '重播' : '播放';
+    byId('turn-label').textContent = replay ? '回合 ' + turn + ' / ' + total : '未加载';
+  }
+
+  function pause() {
+    if (timer !== null) clearInterval(timer);
+    timer = null;
+    syncControls();
+  }
+
+  function resetGrid() {
+    layers = [Array.from(replay.init.owner), Array.from(replay.init.contour)];
+    if (replay.init.latent !== undefined) layers.push(Array.from(replay.init.latent));
+    turn = 0;
+  }
+
+  function seek(target) {
+    target = Math.min(Math.max(target, 0), replay.frames.length);
+    if (target < turn) resetGrid();
+    while (turn < target) {
+      for (const [index, ...values] of replay.frames[turn].d) {
+        layers.forEach((layer, number) => { layer[index] = values[number]; });
+      }
+      turn++;
+    }
+    render(turn === 0 ? replay.init : replay.frames[turn - 1]);
+    syncControls();
+  }
+
+  function inBoard(x, y) {
+    const size = replay.map.size;
+    return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < size && y < size;
+  }
+
+  function diamond(point, solid) {
+    if (!point || !inBoard(point.x, point.y)) return;
+    const x = (point.x + .5) * cellSize, y = (point.y + .5) * cellSize;
+    ctx.beginPath();
+    ctx.moveTo(x, y - 7);
+    ctx.lineTo(x + 7, y);
+    ctx.lineTo(x, y + 7);
+    ctx.lineTo(x - 7, y);
+    ctx.closePath();
+    ctx.save();
+    ctx.fillStyle = ctx.strokeStyle = paint.boost;
+    ctx.lineWidth = 2;
+    if (solid) ctx.fill();
+    else { ctx.setLineDash([2, 2]); ctx.stroke(); }
+    ctx.restore();
+  }
+
+  function draw(frame) {
+    const size = replay.map.size;
+    const [owner, contour, latent] = layers;
+    ctx.fillStyle = paint.line;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    for (let index = 0; index < terrain.length; index++) {
+      const x = (index % size) * cellSize, y = Math.floor(index / size) * cellSize;
+      const cell = terrain[index];
+      ctx.fillStyle = cell === '#' ? paint.defect : field[owner[index]] || paint.cell;
+      ctx.fillRect(x, y, cellSize - 1, cellSize - 1);
+      if (contour[index] !== '.') {
+        ctx.strokeStyle = team[contour[index]];
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 3, y + 3, 9, 9);
+      }
+      if (cell === '*') {
+        ctx.fillStyle = paint.key;
+        ctx.fillRect(x + 6, y + 6, 4, 4);
+      }
+      if (latent && latent[index] !== '.') {
+        ctx.fillStyle = paint.sheet;
+        ctx.fillRect(x + 2, y + 2, 3, 3);
+      }
+    }
+    const rect = frame.order?.rect;
+    if (Array.isArray(rect) && rect.length === 4 && inBoard(rect[0], rect[1]) && inBoard(rect[2], rect[3])) {
+      const [x0, y0, x1, y1] = rect;
+      ctx.save();
+      ctx.strokeStyle = paint.order;
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 3]);
+      ctx.strokeRect(x0 * cellSize + 1, y0 * cellSize + 1,
+        (x1 - x0 + 1) * cellSize - 3, (y1 - y0 + 1) * cellSize - 3);
+      ctx.restore();
+    }
+    diamond(frame.boost_next, false);
+    diamond(frame.boost, true);
+    frame.beams.forEach((beam, seat) => {
+      if (!beam.alive || !inBoard(beam.x, beam.y)) return;
+      const x = beam.x * cellSize + 2, y = beam.y * cellSize + 2;
+      ctx.fillStyle = team[seat];
+      ctx.fillRect(x, y, 12, 12);
+      ctx.strokeStyle = beam.boost_left > 0 ? paint.boost : paint.sheet;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, 12, 12);
+      const [dx, dy] = directions.get(beam.dir) || [0, 0];
+      ctx.fillStyle = paint.sheet;
+      ctx.beginPath();
+      ctx.arc(x + 6 + 3 * dx, y + 6 + 3 * dy, 2, 0, Math.PI * 2);
+      ctx.fill();
+    });
+  }
+
+  function render(frame) {
+    draw(frame);
+    sides.forEach((side, seat) => {
+      side.name.textContent = replay.players[seat];
+      side.score.textContent = frame.score[seat];
+      side.bonus.textContent = '订单奖励 ' + frame.bonus[seat];
+      const command = frame.cmds?.[seat];
+      const arrow = typeof command === 'string' && directions.get(command[0]);
+      const elapsed = frame.ms?.[seat];
+      side.command.textContent = arrow ? '指令 ' + arrow[2] + (command.endsWith('+') ? '+' : '') :
+        turn === 0 ? '初始局面' : '指令 —';
+      if (Number.isFinite(elapsed)) side.command.textContent += ' · ' + elapsed + ' ms';
+    });
+    const events = byId('events');
+    events.replaceChildren();
+    const entries = Array.isArray(frame.events) ? frame.events.filter(event => event && typeof event.t === 'string') : [];
+    const labels = entries.map(event => {
+      const seat = event.s;
+      const name = seat === 0 || seat === 1 ? replay.players[seat] + ' · ' : '';
+      return name + (eventNames.get(event.t) || event.t);
+    });
+    for (const label of labels.length ? labels : [turn === 0 ? '初始局面' : '本回合无事件']) {
+      const item = document.createElement('li');
+      item.textContent = label;
+      events.append(item);
+    }
+  }
+
+  function setReplay(data) {
+    replay = data;
+    turn = 0;
+    pause();
+    canvas.hidden = byId('score-card').hidden = byId('event-card').hidden = byId('legend-card').hidden = !data;
+    byId('empty').hidden = Boolean(data);
+    byId('map-title').textContent = '基板';
+    if (!data) return;
+    terrain = data.map.terrain.join('');
+    byId('latent-legend').hidden = data.init.latent === undefined;
+    canvas.width = canvas.height = data.map.size * cellSize;
+    const stage = data.stage === 'final' ? '决赛' : '初赛';
+    byId('map-title').textContent = (data.map.id || '基板') + ' · ' + stage;
+    const { winner, reason, turns } = data.result;
+    const outcome = winner === null ? (reason === 'tie' ? '平局' : '未判定胜方') : data.players[winner] + ' 获胜';
+    byId('result').textContent = '终局 · ' + outcome + '（' + (reasons[reason] || reason || '对局结束') + '） · ' + turns + ' 回合';
+    resetGrid();
+    seek(0);
+  }
+
+  async function loadSelected() {
+    const reading = ++request;
+    const file = files[list.selectedIndex];
+    setReplay(null);
+    status.classList.remove('error');
+    if (!file) return;
+    status.textContent = '正在读取回放…';
+    try {
+      const data = validate(JSON.parse(await file.text()));
+      if (reading !== request) return;
+      setReplay(data);
+      status.textContent = '已加载 ' + file.name;
+    } catch (error) {
+      if (reading !== request) return;
+      setReplay(null);
+      status.classList.add('error');
+      status.textContent = error instanceof SyntaxError ? '文件不是有效的 JSON。' : '无法打开回放。' + error.message;
+    }
+  }
+
+  function showFiles(available, emptyMessage) {
+    files = available;
+    list.replaceChildren();
+    for (const file of files) {
+      const option = new Option(file.name);
+      option.title = file.webkitRelativePath || file.name;
+      list.add(option);
+    }
+    list.disabled = files.length === 0;
+    if (files.length) {
+      list.selectedIndex = 0;
+      loadSelected();
+    } else {
+      ++request;
+      setReplay(null);
+      list.add(new Option('没有回放文件'));
+      status.classList.remove('error');
+      status.textContent = emptyMessage;
+    }
+  }
+
+  function openFiles(input) {
+    const selected = Array.from(input.files).filter(file => /\.json$/i.test(file.name))
+      .sort((a, b) => b.lastModified - a.lastModified || a.name.localeCompare(b.name));
+    input.value = '';
+    showFiles(selected, '所选位置没有 JSON 文件。');
+  }
+
+  function unpackReplay(encoded) {
+    const bytes = Uint8Array.from(atob(encoded), character => character.charCodeAt(0));
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).text();
+  }
+
+  function start() {
+    if (turn === replay.frames.length) seek(0);
+    timer = setInterval(() => {
+      seek(turn + 1);
+      if (turn === replay.frames.length) pause();
+    }, 1000 / Number(speed.value));
+    syncControls();
+  }
+
+  for (const [button, field] of [['choose-folder', 'folder-input'], ['choose-files', 'files-input']]) {
+    const input = byId(field);
+    byId(button).addEventListener('click', () => input.click());
+    input.addEventListener('change', () => openFiles(input));
+  }
+  list.addEventListener('change', loadSelected);
+  previous.addEventListener('click', () => { pause(); seek(turn - 1); });
+  next.addEventListener('click', () => { pause(); seek(turn + 1); });
+  timeline.addEventListener('input', () => { const target = Number(timeline.value); pause(); seek(target); });
+  play.addEventListener('click', () => timer === null ? start() : pause());
+  speed.addEventListener('change', () => { if (timer !== null) { pause(); start(); } });
+
+  const indexedFiles = (globalThis.playerKitReplayIndex ?? []).map(([name, encoded]) => ({
+    name, webkitRelativePath: 'replays/' + name, text: () => unpackReplay(encoded)
+  }));
+  showFiles(indexedFiles, '暂无可自动加载的回放。');
+})();
+</script>
+</body>
+</html>

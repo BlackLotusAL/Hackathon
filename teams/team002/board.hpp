@@ -1,6 +1,6 @@
 #pragma once
 
-#include "arena_strategy.hpp"
+#include "bot_sdk.hpp"
 
 #include <algorithm>
 #include <array>
@@ -35,8 +35,8 @@ struct Paths {
 };
 
 struct Board {
-    const arena::InitState& init;
-    const arena::TurnState& turn;
+    const bot_sdk::InitState& init;
+    const bot_sdk::TurnState& turn;
     int size;
     int count;
     char own;
@@ -48,7 +48,7 @@ struct Board {
     const std::vector<std::array<int, 4>>& neighbors;
     const Mask& protected_cells;
 
-    Board(const arena::InitState& init, const arena::TurnState& turn,
+    Board(const bot_sdk::InitState& init, const bot_sdk::TurnState& turn,
           const std::vector<std::array<int, 4>>& neighbors, const std::string& terrain,
           const Mask& protected_cells)
         : init(init), turn(turn), size(init.size), count(size * size), own('0' + init.seat),

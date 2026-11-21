@@ -6,7 +6,7 @@ import sqlite3
 from .domain import ContestError
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SQLITE_BUSY_TIMEOUT = 5
 SCHEMA = (
     '''CREATE TABLE prelim_batches (
@@ -14,7 +14,7 @@ SCHEMA = (
     )''',
     '''CREATE TABLE duels (
         id INTEGER PRIMARY KEY, duel_id TEXT UNIQUE NOT NULL, submission TEXT NOT NULL, kind TEXT NOT NULL,
-        batch_id TEXT REFERENCES prelim_batches(batch_id), commits TEXT, started_at TEXT,
+        batch_id TEXT REFERENCES prelim_batches(batch_id), commits TEXT, started_at TEXT, accepted_at TEXT,
         awaiting_ruling INTEGER NOT NULL DEFAULT 0, ruling TEXT, result TEXT, closed_at TEXT,
         confirmed_order INTEGER UNIQUE
     )''',
@@ -49,12 +49,15 @@ class Database:
         self.shutdown = shutdown
         with self.transaction() as connection:
             version = connection.execute('PRAGMA user_version').fetchone()[0]
-            if version != SCHEMA_VERSION:
+            if version == 2:
+                connection.execute('ALTER TABLE duels ADD COLUMN accepted_at TEXT')
+            elif version != SCHEMA_VERSION:
                 existing = connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' LIMIT 1").fetchone()
                 if version or existing is not None:
                     raise ValueError(f'数据库结构版本不受支持，当前结构版本为 {SCHEMA_VERSION}')
                 for statement in SCHEMA:
                     connection.execute(statement)
+            if version != SCHEMA_VERSION:
                 connection.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
         with closing(self._connect()) as connection:
             mode = self._wait_for_lock(lambda: connection.execute('PRAGMA journal_mode = WAL').fetchone())

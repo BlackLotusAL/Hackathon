@@ -6,7 +6,8 @@ import random
 
 from . import mapgen
 from .protocol import dumps, json_object
-from .replay import game_result, verify_replay
+from .replay import game_result
+from .verification import read_referee_log, verify_replay
 
 
 def generate_maps(args):
@@ -28,21 +29,32 @@ def generate_maps(args):
 
 
 def verify_recording(args):
-    game = verify_replay(json_object(args.replay.read_bytes()))
+    if (args.map_file is None) != (args.map_sha256 is None):
+        raise ValueError('核对封存地图时请同时提供 --map-file 和 --map-sha256')
+    replay = json_object(args.replay.read_bytes())
+    board = None
+    if args.map_file is not None:
+        sealed = {'file': args.map_file.read_bytes().decode('utf-8'), 'sha256': args.map_sha256}
+        board, _ = mapgen.load_map(sealed, replay['stage'])
+    log = read_referee_log(args.log_file) if args.log_file is not None else None
+    game = verify_replay(replay, board=board, log=log)
     print(dumps(game_result(game)))
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(prog='python -m engine', description='曝光领地规则引擎工具')
     commands = parser.add_subparsers(dest='command', required=True)
-    maps = commands.add_parser('mapgen', help='生成随机地图')
+    maps = commands.add_parser('mapgen', help='生成天梯或测试用随机地图')
     maps.add_argument('--seed', type=int, default=None, help='起始种子；不填则随机')
     maps.add_argument('--count', type=int, default=1)
     maps.add_argument('--stage', default='prelim', choices=['prelim', 'final'])
-    maps.add_argument('--out', type=Path, help='保存为 JSON 文件；不填则在终端里画出来')
+    maps.add_argument('--out', type=Path, help='保存为 JSON 数组。不填则在终端绘制')
     maps.set_defaults(handler=generate_maps)
-    replay = commands.add_parser('verify-replay', help='独立复核正式回放或初赛材料包回放')
+    replay = commands.add_parser('verify-replay', help='独立复核正式回放')
     replay.add_argument('replay', type=Path)
+    replay.add_argument('--log-file', type=Path, help='裁判的 log.jsonl，可同时核对公开观测和日志')
+    replay.add_argument('--map-file', type=Path, help='公开的封存地图原文件')
+    replay.add_argument('--map-sha256', help='赛前公布的地图 SHA-256')
     replay.set_defaults(handler=verify_recording)
     args = parser.parse_args(argv)
     try:

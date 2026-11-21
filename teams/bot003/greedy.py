@@ -5,7 +5,7 @@
 import os
 import time
 
-from game_core.rules import DIRS, DX, DY, OPP, PARAMS
+from engine.rules import DIRS, DX, DY, OPP, PARAMS
 NO_BUDGET = bool(os.environ.get('ARENA_NO_BUDGET'))   # 设为 1 时不限时：结果与机器快慢无关，便于复现
 from lib import INF, bfs, path_to, enemy_reach, loop_candidates, closure_gain
 

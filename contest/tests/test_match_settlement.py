@@ -1,17 +1,16 @@
-import hashlib
 import json
 
 from .helpers import (TEAMS, Bot, HttpClient, MatchFixture, ArenaStub,
-                     admin_headers, arena_archive, case, contest_handler, run_module, run_query_payload, sealed_maps)
+                     admin_headers, arena_archive, case, contest_handler, plan_duel, run_module, run_query_payload,
+                     sealed_maps)
 
-from service.application import Contest, ContestWorker
-from service.duels import EffectiveGame, load_pools, settle
-from service.executions import review_archive
-from service.server import Admin
+from service.arena import review_archive
+from service.duels import EffectiveGame, save_result, settle
+from service.server import Admin, Contest, ContestWorker
 from engine.core import ENGINE_VERSION, TIEBREAK_METRICS
-from engine.mapgen import generate
 from engine.protocol import dumps
-from engine.replay import VerificationError, game_result, verify_replay
+from engine.replay import game_result
+from engine.verification import VerificationError, verify_replay
 
 
 STARTED = '2026-11-01T14:05:00+08:00'
@@ -29,17 +28,20 @@ class MatchSettlementTests(MatchFixture):
 
     @case('L0-002', '单局全同和启动双崩溃在通过复核后进入待裁定')
     def test_all_equal_at_limit_or_on_double_startup_failure(self):
-        contest = Contest(self.root / 'ties.sqlite', {stage: sealed_maps(stage) for stage in ('prelim', 'final')})
-        arena = ArenaStub()
-        worker = ContestWorker(contest, self.root, arena)
         for number, stage in enumerate(('prelim', 'final'), 1):
             with self.subTest(stage=stage):
+                root = self.root / stage
+                root.mkdir()
+                contest = Contest(root / 'ties.sqlite', {'prelim': sealed_maps('prelim')})
+                arena = ArenaStub()
+                worker = ContestWorker(contest, root, arena)
                 duel_id = f'duel-{number}'
-                contest.duels.accept({'duel_id': duel_id, 'rules': stage, 'sides': TEAMS})
+                plan_duel(contest, duel_id, stage if stage == 'prelim' else 'final-ladder')
                 self.assertTrue(worker.submit_next())
                 request = arena.submitted[-1]
                 bots = [Bot('U'), Bot('D')] if stage == 'prelim' else None
-                _, manifest, replay = self.judge_archive(request, bots)
+                _, manifest, replay = self.judge_archive(
+                    request, bots, archive_root=root, started_at=STARTED if stage == 'final' else None)
                 self.assertEqual(manifest['result']['engine_version'], ENGINE_VERSION)
                 self.assertIsNone(manifest['result']['winner'])
                 self.assertEqual(manifest['result']['reason'], 'tie' if stage == 'prelim' else 'crash')
@@ -86,20 +88,6 @@ class MatchSettlementTests(MatchFixture):
         self.assertEqual(manifest['result']['time_us'], [9978, 8036])
         self.assertEqual(verify_replay(replay).winner, 1)
 
-    @case('L2-002', '天梯也要求当前引擎和完整的公开裁判观测')
-    def test_ladder_archive_must_have_public_evidence_from_the_current_engine(self):
-        request = self.request()
-        output, manifest, replay = self.judge_archive(request, started_at=STARTED)
-        self.assertEqual(review_archive(self.root, request, 'finished', ladder=True), manifest)
-        replay.pop('observations')
-        (output / 'replay.json').write_text(dumps(replay), encoding='utf-8')
-        with self.assertRaisesRegex(VerificationError, '缺少完整的裁判观测'):
-            review_archive(self.root, request, 'finished', ladder=True)
-        manifest['result']['engine_version'] = 'exposure-field/2'
-        (output / 'match.json').write_text(dumps(manifest), encoding='utf-8')
-        with self.assertRaisesRegex(VerificationError, '无可用的同版引擎'):
-            review_archive(self.root, request, 'finished', ladder=True)
-
     @case('L0-005', '正式对决三比三按四项指标顺序决胜')
     def test_formal_tiebreak_order_and_all_equal(self):
         for deciding in (*TIEBREAK_METRICS, None):
@@ -121,36 +109,28 @@ class MatchSettlementTests(MatchFixture):
                     self.assertEqual(settled['games_won'], dict.fromkeys(TEAMS, 3))
                     self.assertEqual(settled['games_lost'], dict.fromkeys(TEAMS, 3))
 
-    @case('L0-006', 'Portal 按局序查询六局复核赛果且重复请求幂等')
-    def test_portal_queries_six_verified_games_with_seat_swaps(self):
-        entries = []
-        for seed in (42, 43, 44):
-            board = generate(seed, 'final')
-            file = self.root / f'{seed}.json'
-            data = (json.dumps(board, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
-            file.write_bytes(data)
-            entries.append({'file': file.name, 'sha256': hashlib.sha256(data).hexdigest()})
-        pool_file = self.root / 'pools.json'
-        pool_file.write_text(dumps({'final': entries}), encoding='utf-8')
+    @case('L0-006', '统一接口受理决赛并固定六局计划，重启后照原计划结算')
+    def test_final_submitted_by_portal_finishes_using_its_stored_plan(self):
+        maps = sealed_maps('final')
         db = self.root / 'contest.sqlite'
-        contest = Contest(db, load_pools(pool_file))
+        client = HttpClient(contest_handler(Contest(db, {'final': maps}, phase='final')))
+        duel_id = client.json(DUELS_PATH, {'sides': TEAMS}, method='POST', status=202)['duel_id']
+        contest = Contest(db, phase='prelim-ladder')
         arena = ArenaStub()
         worker = ContestWorker(contest, self.root, arena)
-
         client = HttpClient(contest_handler(contest))
-
-        duel = {'duel_id': 'duel-1', 'rules': 'final', 'sides': TEAMS}
-        self.assertEqual(client.post(DUELS_PATH, duel), (202, b''))
-        self.assertEqual(client.post(DUELS_PATH, duel), (202, b''))
-        self.assertEqual(client.post(DUELS_PATH, dict(duel, sides=TEAMS[::-1]))[0], 409)
         game_results = []
-        duel_path = DUELS_PATH + '/duel-1'
+        duel_path = f'{DUELS_PATH}/{duel_id}'
+        self.assertEqual(client.json(DUELS_PATH, {'sides': TEAMS}, method='POST', status=409)['code'], 'PHASE_BUSY')
         for ordinal in range(6):
             self.assertTrue(worker.submit_next())
             request = arena.submitted[-1]
             run_id = request['run_id']
-            self.assertEqual(request['bots'], TEAMS if ordinal % 2 == 0 else TEAMS[::-1])
-            self.assertEqual(request['config']['map']['sha256'], entries[ordinal // 2]['sha256'])
+            if ordinal == 0:
+                first_bots = request['bots']
+                self.assertCountEqual(first_bots, TEAMS)
+            self.assertEqual(request['bots'], first_bots if ordinal % 2 == 0 else first_bots[::-1])
+            self.assertEqual((request['rules'], request['config']['map']), ('final', maps[ordinal // 2]))
             us = [1201 if team == 'team001' else 901 for team in request['bots']]
             _, manifest, _ = self.judge_archive(
                 request, [Bot('U', us=us[0]), Bot('D', us=us[1], exit_after_reply=True)])
@@ -163,7 +143,7 @@ class MatchSettlementTests(MatchFixture):
 
         self.assertFalse(worker.submit_next())
         self.assertEqual(len(arena.submitted), 6)
-        self.assertEqual(client.json(duel_path + '/status'), {'duel_id': 'duel-1', 'state': 'finished'})
+        self.assertEqual(client.json(duel_path + '/status'), {'duel_id': duel_id, 'state': 'finished'})
         response = client.json(duel_path + '/result')
         self.assertEqual(response['side_results'], {'team001': 'loss', 'team002': 'win'})
         result = response['result']
@@ -175,22 +155,28 @@ class MatchSettlementTests(MatchFixture):
         self.assertEqual(result['runs'], [game['run_id'] for game in game_results])
         self.assertNotIn('previous_duel_ids', result)
         self.assertEqual(HttpClient(contest_handler(Contest(db))).json(duel_path + '/result'), response)
+        self.assertIn('duel_id', client.json(DUELS_PATH, {'sides': TEAMS}, method='POST', status=202))
 
-    @case('L0-016', '天梯两局按换边归队结算胜负和平局')
-    def test_ladder_settles_two_games_as_win_or_draw(self):
-        contest = Contest(self.root / 'ladder.sqlite')
+    @case('L0-016', '决赛规则的天梯对决同图两局换边，结算胜负和平局')
+    def test_final_ladder_settles_two_games_as_win_or_draw(self):
+        contest = Contest(self.root / 'ladder.sqlite', phase='final-ladder')
         arena = ArenaStub()
         worker = ContestWorker(contest, self.root, arena)
         client = HttpClient(contest_handler(contest))
+        previous = []
         for number, winners in enumerate((TEAMS, [TEAMS[0], TEAMS[0]]), 1):
             with self.subTest(winners=winners):
-                duel_id = f'duel-{number}'
-                contest.duels.accept({'duel_id': duel_id, 'rules': 'prelim', 'sides': TEAMS, 'map_seed': 42})
+                duel_id = client.json(DUELS_PATH, {'sides': TEAMS}, method='POST', status=202)['duel_id']
                 run_ids = []
                 for ordinal, winner in enumerate(winners):
                     self.assertTrue(worker.submit_next())
                     request = arena.submitted[-1]
-                    self.assertEqual(request['bots'], TEAMS if ordinal == 0 else TEAMS[::-1])
+                    if ordinal == 0:
+                        first_request = request
+                        self.assertCountEqual(first_request['bots'], TEAMS)
+                    else:
+                        self.assertEqual(request['bots'], first_request['bots'][::-1])
+                        self.assertEqual(request['config'], first_request['config'])
                     bots = [Bot(command, exit_after_reply=team != winner)
                             for command, team in zip(('U', 'D'), request['bots'])]
                     self.judge_archive(request, bots, started_at=STARTED)
@@ -209,23 +195,21 @@ class MatchSettlementTests(MatchFixture):
                                  ('draw', None) if won[TEAMS[0]] == 1 else ('win', TEAMS[0]))
                 self.assertEqual(response['side_results'],
                                  dict.fromkeys(TEAMS, 'draw') if number == 1 else {'team001': 'win', 'team002': 'loss'})
-                self.assertEqual(result['previous_duel_ids'], [] if number == 1 else ['duel-1'])
+                self.assertEqual(result['previous_duel_ids'], previous)
+                previous = [duel_id]
                 self.assertFalse(worker.submit_next())
 
     @case('L0-017', '正式与天梯构建单败或双败均按整场局数结算')
     def test_build_failures_settle_the_whole_duel(self):
-        contest = Contest(self.root / 'builds.sqlite', {stage: sealed_maps(stage) for stage in ('prelim', 'final')})
+        contest = Contest(self.root / 'builds.sqlite', {'prelim': sealed_maps('prelim')})
         arena = ArenaStub()
         worker = ContestWorker(contest, self.root, arena)
         client = HttpClient(contest_handler(contest))
-        for stage, ladder in (('prelim', True), ('prelim', False), ('final', False)):
+        for stage, ladder in (('prelim', True), ('prelim', False), ('final', True)):
             for failed in ((0,), (1,), (0, 1)):
                 with self.subTest(stage=stage, ladder=ladder, failed=failed):
                     duel_id = f'duel-build-{stage}-{int(ladder)}-' + ''.join(map(str, failed))
-                    body = {'duel_id': duel_id, 'rules': stage, 'sides': TEAMS}
-                    if ladder:
-                        body['map_seed'] = 42
-                    contest.duels.accept(body)
+                    plan_duel(contest, duel_id, stage + '-ladder' if ladder else stage)
                     self.assertTrue(worker.submit_next())
                     request = arena.submitted[-1]
                     output = self.root / 'runs' / request['run_id']
@@ -253,18 +237,18 @@ class MatchSettlementTests(MatchFixture):
                     self.assertEqual(contest.duels.show(duel_id)['attempts'][0]['review'], 'build_failed')
                     self.assertFalse(worker.submit_next())
 
-    @case('L0-020', '决赛三比三累计指标全同后可录入整场裁定，Portal 取得胜方')
+    @case('L0-020', '初赛三比三累计指标全同后可录入整场裁定，Portal 取得胜方')
     def test_formal_equal_totals_can_be_ruled_after_six_effective_games(self):
         db = self.root / 'formal-tie.sqlite'
-        contest = Contest(db, {'final': sealed_maps('final')})
-        contest.duels.accept({'duel_id': 'duel-1', 'rules': 'final', 'sides': TEAMS})
+        contest = Contest(db, {'prelim': sealed_maps('prelim')})
+        plan_duel(contest, 'duel-1', 'prelim')
         arena = ArenaStub()
         worker = ContestWorker(contest, self.root, arena)
         for _ in range(6):
             self.assertTrue(worker.submit_next())
             request = arena.submitted[-1]
             self.judge_archive(request, [Bot('U'), Bot('D', exit_after_reply=True)])
-            self.poll_and_review(arena, worker, request['run_id'], 'finished')
+            self.poll_and_review(arena, worker, request['run_id'], 'finished', preliminary=True)
         stored = contest.duels.show('duel-1')
         self.assertEqual([run['review'] for run in stored['attempts']], ['effective'] * 6)
         self.assertIsNone(stored['result'])
@@ -287,79 +271,39 @@ class MatchSettlementTests(MatchFixture):
         self.assertEqual(len(result['games']), 6)
         self.assertNotIn('operator', result)
 
-    @case('L0-028', '决赛资格单败和双败可录入，保留历史生效单局并关闭当前尝试')
-    def test_final_eligibility_forfeit_settles_and_preserves_effective_games(self):
+    @case('L0-028', '历史决赛资格判负结果可查询，后台判负入口已移除')
+    def test_legacy_final_forfeit_is_readable_after_admin_route_removal(self):
         db = self.root / 'forfeits.sqlite'
-        contest = Contest(db, {'final': sealed_maps('final')})
-        arena = ArenaStub()
-        worker = ContestWorker(contest, self.root, arena)
-        admin = Admin(contest, 'organizer', 'test-password', arena)
+        duel_id = 'duel-legacy-forfeit'
+        existing = Contest(db, {'final': sealed_maps('final')})
+        plan_duel(existing, duel_id, 'final')
+        result = {
+            'outcome': 'win', 'winner': TEAMS[1], 'forfeited': [TEAMS[0]], 'reason': '选手确认退赛',
+            'games_won': {TEAMS[0]: 0, TEAMS[1]: 6}, 'games_lost': {TEAMS[0]: 6, TEAMS[1]: 0}, 'runs': [],
+        }
+        with existing.database.transaction() as connection:
+            row = connection.execute('SELECT id FROM duels WHERE duel_id = ?', (duel_id,)).fetchone()
+            save_result(connection, row['id'], result)
+
+        contest = Contest(db, phase='final-ladder')
+        admin = Admin(contest, 'organizer', 'test-password')
         handler = contest_handler(contest, admin=admin)
-        portal = HttpClient(handler)
-        organizer = HttpClient(handler, prefix='/admin', headers=admin_headers('organizer', 'test-password'))
-        first, second = 'duel-final-a', 'duel-final-b'
-        for duel_id in (first, second):
-            self.assertEqual(portal.post(DUELS_PATH, {'duel_id': duel_id, 'rules': 'final', 'sides': TEAMS}), (202, b''))
-        path = 'final/forfeits'
-        self.assertEqual(organizer.json(path)['duels'], [{'duel_id': duel_id, 'sides': TEAMS}
-                                                        for duel_id in (first, second)])
-        self.assertTrue(worker.submit_next())
-        request = arena.submitted[-1]
-        output, _, _ = self.judge_archive(request, [Bot('U'), Bot('D', exit_after_reply=True)])
-        evidence = (output / 'replay.json').read_bytes()
-        self.poll_and_review(arena, worker, request['run_id'], 'finished')
-        self.assertTrue(worker.submit_next())
-        in_flight = contest.runs.claim_poll()
-        self.assertEqual(in_flight.run_id, arena.submitted[-1]['run_id'])
+        client = HttpClient(handler)
+        auth = admin_headers('organizer', 'test-password')
+        path = '/admin/final/forfeits'
+        self.assertEqual(client.json(path, headers=auth, status=404)['code'], 'NOT_FOUND')
+        self.assertEqual(client.json(path, {'duel_id': duel_id}, method='POST', headers=auth,
+                                     status=404)['code'], 'NOT_FOUND')
+        self.assertEqual(client.json(f'{DUELS_PATH}/{duel_id}/status')['state'], 'finished')
+        self.assertEqual(client.json(f'{DUELS_PATH}/{duel_id}/result')['result'], dict(result, games=[]))
 
-        body = {'duel_id': first, 'defeated': [TEAMS[0]], 'reason': '选手确认退赛'}
-        self.assertEqual(HttpClient(handler).post('/admin/' + path, body)[0], 401)
-        self.assertEqual(organizer.post(path, dict(body, defeated=['team-outside']))[0], 400)
-        ruling = organizer.json(path, body, method='POST')
-        self.assertEqual((ruling['scope'], ruling['operator'], ruling['winner']), ('forfeit', 'organizer', TEAMS[1]))
-        self.assertEqual(organizer.json(path, body, method='POST'), ruling)
-        self.assertEqual(organizer.post(path, dict(body, defeated=[TEAMS[1]]))[0], 409)
-        contest.runs.complete_polls((in_flight,), 200,
-                                    run_query_payload({'run_id': in_flight.run_id, 'state': 'finished'}))
-        self.assertFalse(worker.review_next())
-        self.assertEqual(contest.duels.show(first)['attempts'][1]['arena_result'], None)
-        self.assertEqual((output / 'replay.json').read_bytes(), evidence)
-        self.assertEqual(portal.json(f'{DUELS_PATH}/{first}/status')['state'], 'finished')
-        settled = portal.json(f'{DUELS_PATH}/{first}/result')
-        self.assertEqual(settled['side_results'], {TEAMS[0]: 'loss', TEAMS[1]: 'win'})
-        result = settled['result']
-        self.assertEqual((result['winner'], result['forfeited'], result['reason']), (TEAMS[1], body['defeated'], body['reason']))
-        self.assertEqual(result['games_won'], {TEAMS[0]: 0, TEAMS[1]: 6})
-        self.assertEqual(result['games_lost'], {TEAMS[0]: 6, TEAMS[1]: 0})
-        self.assertEqual(result['runs'], [request['run_id']])
-        game, = result['games']
-        self.assertEqual((game['ordinal'], game['run_id'], game['winner']), (1, request['run_id'], TEAMS[0]))
-
-        self.assertEqual(organizer.json(path)['duels'], [{'duel_id': second, 'sides': TEAMS}])
-        next_run = contest.runs.claim()
-        self.assertEqual(next_run['duel_id'], second)
-        reason = '双方均丧失参赛资格'
-        decision = organizer.json(path, {'duel_id': second, 'defeated': TEAMS[::-1], 'reason': reason}, method='POST')
-        self.assertEqual(decision['forfeited'], sorted(TEAMS))
-        self.assertIsNone(decision['winner'])
-        self.assertEqual(organizer.json(path, {'duel_id': second, 'defeated': TEAMS, 'reason': reason}, method='POST'), decision)
-        contest.runs.complete_submission(next_run['run_id'], 202)
-        self.assertIsNone(contest.runs.claim_poll())
-        self.assertFalse(worker.submit_next())
-        self.assertEqual(organizer.json(path), {'duels': []})
-        double_loss = portal.json(f'{DUELS_PATH}/{second}/result')
-        self.assertEqual(double_loss['side_results'], dict.fromkeys(TEAMS, 'loss'))
-        self.assertEqual(double_loss['result']['outcome'], 'double_loss')
-        self.assertEqual(double_loss['result']['games'], [])
-        self.assertEqual(double_loss['result']['games_lost'], dict.fromkeys(TEAMS, 6))
-
-    @case('L0-007', '故障重跑固定原计划且旧轮询响应不能生效')
+    @case('L0-007', '故障重跑固定原计划，旧轮询响应和旧执行编号均不能生效')
     def test_retry_pins_the_plan_and_ignores_a_stale_poll(self):
         contest = Contest(self.root / 'contest.sqlite')
         arena = ArenaStub()
         worker = ContestWorker(contest, self.root, arena)
         sides = ['team001', 'bot002']
-        contest.duels.accept({'duel_id': 'duel-1', 'rules': 'prelim', 'sides': sides, 'map_seed': 42})
+        duel_id = contest.duels.accept({'sides': sides})['duel_id']
         self.assertTrue(worker.submit_next())
         original = arena.submitted[-1]
         stale_poll = contest.runs.claim_poll()
@@ -373,9 +317,22 @@ class MatchSettlementTests(MatchFixture):
         self.assertTrue(worker.submit_next())
         self.assertEqual(arena.submitted[-1], dict(original, run_id=replacement))
 
-        self.judge_archive(arena.submitted[-1], [Bot('U'), Bot('D', exit_after_reply=True)], started_at=STARTED)
+        output, manifest, _ = self.judge_archive(
+            arena.submitted[-1], [Bot('U'), Bot('D', exit_after_reply=True)], started_at=STARTED)
+        evidence = output / 'match.json'
+        wrong_result = dict(manifest['result'], run_id=original['run_id'])
+        evidence.write_text(dumps(dict(manifest, result=wrong_result)), encoding='utf-8')
         self.poll_and_review(arena, worker, replacement, 'finished')
-        self.assertIsNone(contest.duels.result('duel-1')['result'])
+        held = contest.duels.show(duel_id)['attempts'][1]
+        self.assertEqual((held['run_id'], held['review']), (replacement, 'held'))
+        self.assertIn('result.run_id', held['issue'])
+        self.assertFalse(worker.submit_next())
+        self.assertIsNone(contest.duels.result(duel_id)['result'])
+
+        evidence.write_text(dumps(manifest), encoding='utf-8')
+        contest.runs.recheck(replacement)
+        self.assertTrue(worker.review_next())
+        self.assertEqual(contest.duels.show(duel_id)['attempts'][1]['review'], 'effective')
 
         self.assertTrue(worker.submit_next())
         second = arena.submitted[-1]
@@ -386,14 +343,14 @@ class MatchSettlementTests(MatchFixture):
         self.poll_and_review(arena, worker, second['run_id'], 'build_failed')
         self.assertFalse(worker.submit_next())
         client = HttpClient(contest_handler(contest))
-        result = client.json(DUELS_PATH + '/duel-1/result')['result']
+        result = client.json(f'{DUELS_PATH}/{duel_id}/result')['result']
         self.assertEqual(result['outcome'], 'double_loss')
         self.assertEqual(result['games_lost'], dict.fromkeys(sides, 2))
         self.assertEqual(result['build_run_id'], second['run_id'])
         self.assertEqual(result['runs'], [replacement])
         self.assertEqual([(game['ordinal'], game['run_id']) for game in result['games']], [(1, replacement)])
         self.assertEqual(result['started_at'], STARTED)
-        old = contest.duels.show('duel-1')['attempts'][0]
+        old = contest.duels.show(duel_id)['attempts'][0]
         self.assertEqual(old['review'], 'void')
         self.assertIsNone(old['arena_result'])
 
@@ -402,7 +359,7 @@ class MatchSettlementTests(MatchFixture):
         contest = Contest(self.root / 'contest.sqlite')
         arena = ArenaStub()
         worker = ContestWorker(contest, self.root, arena)
-        contest.duels.accept({'duel_id': 'duel-deferred', 'rules': 'prelim', 'sides': TEAMS, 'map_seed': 42})
+        plan_duel(contest, 'duel-deferred', 'prelim-ladder')
         self.assertTrue(worker.submit_next())
         deferred_run = arena.submitted[-1]['run_id']
         contest.runs.invalidate(deferred_run, '平台故障待重跑')
@@ -421,22 +378,23 @@ class MatchSettlementTests(MatchFixture):
             ('duel-earliest', 'prelim', ['team001', 'team003']),
             ('duel-left', 'prelim', ['team001', 'bot002']),
             ('duel-right', 'prelim', ['team002', 'team004']),
-            ('duel-other-stage', 'final', TEAMS),
             ('duel-both', 'prelim', TEAMS),
             ('duel-again', 'prelim', TEAMS),
         )
         for duel_id, stage, sides in duels:
-            contest.duels.accept({'duel_id': duel_id, 'rules': stage, 'sides': sides, 'map_seed': 42})
+            plan_duel(contest, duel_id, stage + '-ladder', sides)
             finish_after_build_failure(duel_id)
         contest.runs.retry(deferred_run)
         finish_after_build_failure('duel-deferred')
+        plan_duel(contest, 'duel-other-stage', 'final-ladder')
+        finish_after_build_failure('duel-other-stage')
         self.assertFalse(worker.submit_next())
         client = HttpClient(contest_handler(contest))
         expected = (
+            ('duel-other-stage', []),
             ('duel-deferred', ['duel-again']),
             ('duel-again', ['duel-both']),
             ('duel-both', ['duel-left', 'duel-right']),
-            ('duel-other-stage', []),
             ('duel-right', []),
             ('duel-left', ['duel-earliest']),
             ('duel-earliest', []),

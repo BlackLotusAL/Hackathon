@@ -1,1 +1,1 @@
-# Uses only the standard library and the official Arena SDK.
+# Uses the Python standard library and the bundled SDK.

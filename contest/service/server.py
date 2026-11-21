@@ -7,21 +7,98 @@ import hmac
 import re
 import socket
 from threading import Event, Thread
+from time import monotonic
 from urllib.parse import quote, unquote
 
-from engine.protocol import dumps, json_object
+from engine.protocol import RUN_ID, dumps, json_object
+from engine.verification import VerificationError
 
-from .application import Contest, ContestWorker
-from .arena import ArenaClient
+from .arena import RUN_QUERY_BATCH_SIZE, ArenaClient, ExecutionService, review_archive
 from .config import IPWhitelist
-from .database import DatabaseStopping
-from .domain import RUN_ID, ContestError
-from .duels import load_pools
+from .database import Database, DatabaseStopping
+from .domain import ContestError
+from .duels import DuelService, Rulings, load_pools
+from .preliminary import Preliminary
 from .workbook import MAX_UPLOAD, MIME
 
 
+PRELIMINARY_POLL_INTERVAL = 10
 DUEL_QUERY = re.compile(r'/contest/v1/duels/([^/]+)/(status|result)')
 LOAD_TEST_RESOURCE = re.compile(r'/admin/load-tests/([^/]+)(?:/(retry|stop))?')
+
+
+class Contest:
+    """One shared database, with explicit feature services for every caller."""
+
+    def __init__(self, path, pools=None, *, phase='prelim-ladder', shutdown=None):
+        self.database = Database(path, shutdown=shutdown)
+        self.maps = pools or {}
+        self.duels = DuelService(self.database, self.maps, phase)
+        self.runs = ExecutionService(self.database)
+        self.preliminary = Preliminary(self.database, self.maps, phase)
+        self.rulings = Rulings(self.database)
+
+
+class ContestWorker:
+    def __init__(self, contest, archive_root, arena):
+        self.contest, self.archive_root = contest, archive_root
+        self.arena = arena
+
+    def submit_next(self):
+        request = self.contest.runs.claim()
+        if request:
+            status = self.arena.submit(request)
+            self.contest.runs.complete_submission(request['run_id'], status)
+            return True
+        return False
+
+    def poll_next(self):
+        claim = self.contest.runs.claim_poll()
+        if claim is None:
+            return False
+        self._poll_runs((claim,))
+        return True
+
+    def _poll_runs(self, claims):
+        status, payload = self.arena.query_runs([claim.run_id for claim in claims])
+        self.contest.runs.complete_polls(claims, status, payload)
+
+    def poll_preliminary_round(self, stop=None):
+        targets = self.contest.runs.preliminary_poll_targets()
+        for offset in range(0, len(targets), RUN_QUERY_BATCH_SIZE):
+            if stop is not None and stop.is_set():
+                return
+            batch = targets[offset:offset + RUN_QUERY_BATCH_SIZE]
+            claims = self.contest.runs.claim_preliminary_polls(batch)
+            if claims:
+                self._poll_runs(claims)
+
+    def poll_preliminary(self, stop):
+        next_round = monotonic()
+        while not stop.wait(max(0, next_round - monotonic())):
+            self.poll_preliminary_round(stop)
+            # Advance to the next scheduled tick, skipping ticks consumed by this round.
+            elapsed = monotonic() - next_round
+            intervals = int(elapsed // PRELIMINARY_POLL_INTERVAL) + 1
+            next_round += intervals * PRELIMINARY_POLL_INTERVAL
+
+    def review_next(self):
+        pending = self.contest.runs.next_review()
+        if pending is None:
+            return False
+        request, arena_result, ladder = pending
+        run_id, state = request['run_id'], arena_result['state']
+        if state == 'platform_error':
+            self.contest.runs.complete_review(run_id, 'void', issue=arena_result['reason'])
+            return True
+        try:
+            manifest = review_archive(self.archive_root, request, state, ladder=ladder)
+        except VerificationError as error:
+            self.contest.runs.complete_review(run_id, 'held', issue=str(error))
+        else:
+            review = 'effective' if state == 'finished' else 'build_failed'
+            self.contest.runs.complete_review(run_id, review, manifest=manifest)
+        return True
 
 
 class Admin:
@@ -60,7 +137,6 @@ class Admin:
             '/admin/prelim/standings': self.preliminary.standings,
             '/admin/load-tests': self.preliminary.load_tests,
             '/admin/rulings': self.rulings.pending,
-            '/admin/final/forfeits': self.rulings.forfeitable_finals,
         }
         if path in queries:
             return http.reply(200, queries[path]())
@@ -95,11 +171,6 @@ class Admin:
             body = http.read_json('INVALID_RULING', '请填写裁定范围、编号、胜方和理由')
             ruling = self.rulings.record(body.get('scope'), body.get('target'), body.get('winner'),
                                          body.get('reason'), operator=self.user)
-            return http.reply(200, ruling)
-        if path == '/admin/final/forfeits':
-            body = http.read_json('INVALID_FORFEIT', '请填写决赛场次、判负队伍和理由')
-            ruling = self.rulings.forfeit_final(body.get('duel_id'), body.get('defeated'), body.get('reason'),
-                                                operator=self.user)
             return http.reply(200, ruling)
         load_test = LOAD_TEST_RESOURCE.fullmatch(path)
         if load_test:
@@ -181,8 +252,7 @@ def handler_for(contest, *, admin=None, ip_whitelist=None):
                         return self.reply(200, query(unquote(duel_id)))
                 elif path == '/contest/v1/duels':
                     body = self.read_json('INVALID_JSON', '请求必须包含 UTF-8 JSON 对象')
-                    contest.duels.accept(body)
-                    return self.reply(202)
+                    return self.reply(202, contest.duels.accept(body))
                 return self.reply(404, {'code': 'NOT_FOUND'})
             except ContestError as error:
                 headers = None
@@ -209,7 +279,7 @@ def serve(settings):
     pools = load_pools(settings.maps)
     settings.db.parent.mkdir(parents=True, exist_ok=True)
     stop = Event()
-    contest = Contest(settings.db, pools, shutdown=stop)
+    contest = Contest(settings.db, pools, phase=settings.phase, shutdown=stop)
     admin = (Admin(contest, settings.admin_user, settings.admin_password, arena)
              if settings.admin_user else None)
     worker = ContestWorker(contest, settings.archive_root, arena)

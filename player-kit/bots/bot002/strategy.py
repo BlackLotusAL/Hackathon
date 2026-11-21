@@ -1,12 +1,12 @@
 """bot002 贪心：贴着己方图形区画收益最高的矩形，对手逼近就回家，顺手扫近处的对手轮廓、抢道具。
 
-每回合的判断顺序和各项参数见 README.md。搜索预算为 80 毫秒，设置 ARENA_NO_BUDGET=1 可关闭预算，便于复现。
+每回合的判断顺序和各项参数见 README.md。默认搜索预算为 80 毫秒。
 """
 import os
 import time
 
-from game_core.rules import DIRS, DX, DY, OPP, PARAMS      # noqa: E402
-from backend.runtime.state import InitState, TurnState
+from engine.rules import DIRS, DX, DY, OPP, PARAMS      # noqa: E402
+from sdk import InitState, TurnState
 NO_BUDGET = bool(os.environ.get('ARENA_NO_BUDGET'))   # 设为 1 时不限时：结果与机器快慢无关，便于复现
 from lib import INF, bfs, path_to, enemy_reach, loop_candidates, closure_gain  # noqa: E402
 

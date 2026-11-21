@@ -7,8 +7,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
-from .core import ENGINE_VERSION, Game, PARAMS, TIME_LIMIT_STATES, apply_startup, apply_turn
-from .protocol import (MAX_RESPONSE_BYTES, VERSION, dumps, end_message, init_message,
+from .core import Game, PARAMS, TIME_LIMIT_STATES, apply_startup, apply_turn
+from .protocol import (MAX_RESPONSE_BYTES, dumps, end_message, init_message,
                        json_object, parse_reply, turn_message)
 from .replay import Recorder, public_observation
 
@@ -34,7 +34,7 @@ class HttpBot:
         """Return transport status, HTTP status, body and elapsed microseconds."""
         if self.exited():
             return 'crash', 0, None, 0
-        headers = {'X-Arena-Protocol': VERSION, 'Connection': 'close'}
+        headers = {'Connection': 'close'}
         data = None
         if body is not None:
             data = dumps(body).encode('utf-8')
@@ -103,16 +103,16 @@ class HttpBot:
             time.sleep(min(0.05, max(0, end - time.monotonic())))
         return False, 'startup' if not self.exited() else 'crash'
 
-    def post(self, mid, what, msg, limit_s):
-        st, code, data, us = self.request('POST', '/v1/matches/%s/%s' % (mid, what), msg, limit_s)
+    def post(self, run_id, what, msg, limit_s):
+        st, code, data, us = self.request('POST', f'/v1/matches/{run_id}/{what}', msg, limit_s)
         if st == 'ok' and not 200 <= code < 300:
             st = 'invalid'
         return st, code, data, us
 
-    def turn(self, mid, msg, limit_s):
+    def turn(self, run_id, msg, limit_s):
         """返回 (cmd, status, raw, us)，区分超时、连接失败、无效回复和请求前的程序退出。"""
         t = msg['turn']
-        st, code, data, us = self.post(mid, 'turns/%d' % t, msg, limit_s)
+        st, code, data, us = self.post(run_id, 'turns/%d' % t, msg, limit_s)
         raw = data.decode('utf-8', 'replace')[:200] if isinstance(data, bytes) else data
         if st == 'crash':
             return None, 'crash', raw, us
@@ -128,14 +128,10 @@ class HttpBot:
 class Match:
     """Run a timed judge match with the Bot clients supplied by the task."""
 
-    def __init__(self, board, bots, *, out_dir, names, match_id, stage):
+    def __init__(self, board, bots, *, out_dir, names, run_id, stage):
         self.board, self.bots, self.names = board, bots, names
         self.out_dir = Path(out_dir)
-        self.mid, self.stage = match_id, stage
-
-    def sid(self, seat):
-        """Keep the Bot sessions distinct even when the two seats share a service."""
-        return '%s-%d' % (self.mid, seat)
+        self.run_id, self.stage = run_id, stage
 
     @staticmethod
     def _observe(log, recorder, entry):
@@ -145,7 +141,6 @@ class Match:
     def run(self):
         game = Game(self.board, stage=self.stage)
         recorder = Recorder(game, self.names)
-        recorder.data.update(engine_version=ENGINE_VERSION, observations=[])
         errors = [0, 0]
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -156,7 +151,7 @@ class Match:
             initial = [None, None]
             if all(ok for ok, _ in ready):
                 futures = [
-                    pool.submit(bot.post, self.sid(seat), 'init', init_message(game, seat), PARAMS['init_ms'] / 1000.0)
+                    pool.submit(bot.post, self.run_id, 'init', init_message(game, seat), PARAMS['init_ms'] / 1000.0)
                     for seat, bot in enumerate(self.bots)
                 ]
                 initial = [future.result()[0] for future in futures]
@@ -173,7 +168,7 @@ class Match:
 
             message = end_message(game)
             pending = {
-                seat: pool.submit(bot.post, self.sid(seat), 'end', message, PARAMS['end_ms'] / 1000.0)
+                seat: pool.submit(bot.post, self.run_id, 'end', message, PARAMS['end_ms'] / 1000.0)
                 for seat, bot in enumerate(self.bots) if ready[seat][0] and not bot.exited()
             }
             ends = [pending[seat].result()[0] if seat in pending else None for seat in (0, 1)]
@@ -184,12 +179,12 @@ class Match:
         replay = recorder.finish()
         (self.out_dir / 'replay.json').write_text(dumps(replay), encoding='utf-8')
         return dict(replay['result'], map=self.board['id'], stage=game.stage, players=self.names,
-                    errors=errors, match_id=self.mid)
+                    errors=errors, run_id=self.run_id)
 
     def _turn(self, game, recorder, pool, log, errors):
         message = turn_message(game)
         limit = PARAMS['turn_ms'] / 1000.0
-        futures = [pool.submit(bot.turn, self.sid(seat), message, limit) for seat, bot in enumerate(self.bots)]
+        futures = [pool.submit(bot.turn, self.run_id, message, limit) for bot in self.bots]
         responses = [future.result() for future in futures]
         commands, statuses, replies, elapsed = [list(field) for field in zip(*responses)]
         for seat, status in enumerate(statuses):

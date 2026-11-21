@@ -1,10 +1,9 @@
 """Execute an Arena task and publish the referee's result and observations."""
-import hashlib
 import time
 
 from engine.core import ENGINE_VERSION
 from engine.mapgen import load_map
-from engine.protocol import dumps, json_object
+from engine.protocol import RUN_ID, dumps, json_object
 from engine.referee import HttpBot, Match
 
 
@@ -33,8 +32,8 @@ class ContainerBot(HttpBot):
 def run_task(task_path, output, stage=None):
     task = json_object(task_path.read_bytes())
     run_id = task['run_id']
-    if not isinstance(run_id, str) or not run_id:
-        raise ValueError('run_id 必须为非空字符串')
+    if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
+        raise ValueError('run_id 必须是形如 run-7001.2 的完整执行编号')
     if stage is None:
         stage = task.get('rules', 'prelim')
     if stage not in ('prelim', 'final'):
@@ -49,11 +48,13 @@ def run_task(task_path, output, stage=None):
         url = spec['url']
         if not isinstance(url, str) or not url.startswith('http://'):
             raise ValueError('bot url 必须是 HTTP 服务根地址')
-        names.append(spec.get('name', f'bot{seat}'))
+        name = spec.get('name', f'bot{seat}')
+        if not isinstance(name, str):
+            raise ValueError('Bot 名称须为字符串')
+        names.append(name)
         bots.append(ContainerBot(url, task_path.parent / 'exits' / f'p{seat}.json'))
-    match_id = 'run-' + hashlib.sha256(run_id.encode('utf-8')).hexdigest()[:32]
-    result = Match(board, bots, names=names, stage=stage, match_id=match_id, out_dir=output).run()
-    result.update(match_id=run_id, engine_version=ENGINE_VERSION, map_sha256=digest)
+    result = Match(board, bots, names=names, stage=stage, run_id=run_id, out_dir=output).run()
+    result.update(engine_version=ENGINE_VERSION, map_sha256=digest)
     temporary = output / 'result.json.tmp'
     temporary.write_text(dumps(result) + '\n', encoding='utf-8')
     temporary.replace(output / 'result.json')
