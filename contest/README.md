@@ -25,15 +25,19 @@ cp -n config/local.example.json config/local.json
 2. 点击 **创建单循环**，查看对决进度和待处理记录。
 3. 所有对决完成后点击 **确认赛果**，再点击 **下载初赛结果**。导出的 `初赛结果.xlsx` 包含「排名」「对决」「对局」三张工作表，供 Portal 整本导入。
 
+复核通过的单局四项全同或正式对决累计全同时，在 **人工裁定** 选择对应局或场次，录入胜方与理由。原始归档供赛后复核，「对局」表包含生效胜方和裁定理由。
+
 ## 配置文件
 
 `config/local.example.json` 是本地配置模板，`config/production.example.json` 是正式配置模板。两者均通过 HTTP 对接 Arena。
+
+Contest 按 `db` 配置初始化 SQLite 数据库。Arena 地址和共享归档路径沿用现有配置。
 
 配置文件中，`archive_root` 的相对路径以 Contest 安装目录为基准，`db` 和 `maps` 的相对路径以配置文件所在目录为基准。命令行路径相对于当前工作目录。取值优先级为命令行参数、配置文件、内置默认值。
 
 | 字段 | 用途 |
 | --- | --- |
-| `db` | SQLite 数据库路径，必填。首次启动创建父目录和表 |
+| `db` | SQLite 数据库路径，必填。首次启动创建父目录和表，目录须位于支持 SQLite WAL 的本地文件系统 |
 | `arena_url` | 启动服务时必填，填写 Arena 的 HTTP 基础地址。可用 `serve --arena-url` 覆盖 |
 | `archive_root` | 启动服务时必填，填写与 Arena 共享的归档根目录。可用 `serve --archive-root` 覆盖 |
 | `maps` | 封存地图池配置路径，执行正式对决前配置相应赛段的地图池 |
@@ -68,7 +72,7 @@ cp -n config/production.example.json config/production.json
 
 填写正式后台账号密码、Arena 地址、共享归档根目录和地图池路径。Arena 地址模板为 `http://127.0.0.1:18080`，须指向实际监听端口。Portal 配置可访问的 Contest 地址。三个服务可使用不同的挂载路径，但各自的归档根目录须指向同一存储。
 
-Contest 通过 `POST /arena/v1/runs` 提交单局。正式初赛每 10 秒通过 `POST /arena/v1/runs/query` 查询待处理的当前尝试，每批最多 100 个编号。天梯和决赛使用 `GET /arena/v1/runs/{run_id}`，运行统计使用 `GET /arena/v1/status`。启动新版初赛流程前，Arena 须支持批量查询接口。 [Arena 状态查询契约](<../docs/Arena 与 Contest 对接说明.md#33-批量查询执行>)
+Contest 通过 `POST /arena/v1/runs` 提交单局，通过 `POST /arena/v1/runs/query` 查询待处理的当前尝试。正式初赛和独立压测每 10 秒发起一轮，每批最多 100 个编号。天梯和决赛沿原轮询节奏每次传一个编号。运行统计使用 `GET /arena/v1/status`。 [Arena 批量查询示例](<../docs/Arena 与 Contest 对接说明.md#31-批量查询>)
 
 Arena 对归档有写权限，Contest、Portal 只读。完成的执行在 `runs/<run_id>/` 下交付 `match.json`、`replay.json` 和 `log.jsonl`，构建失败提供 `match.json`，已有构建日志位于 `builds/<team_id>/<run_id>.log`。
 
@@ -153,10 +157,24 @@ docker build --platform linux/amd64 -f contest/judge/Dockerfile -t exposure-judg
 | 创建下一次执行尝试 | `.venv/bin/python -B -m service --config config/local.json retry run-1.1` | 当前尝试已作废 |
 | 重新复核 | `.venv/bin/python -B -m service --config config/local.json recheck run-1.2` | 当前尝试暂缓生效 |
 | 按原编号补发 | `.venv/bin/python -B -m service --config config/local.json resend run-1.1` | 当前任务交付未确认或被 Arena 拒绝 |
+| 查询待裁定场次 | `.venv/bin/python -B -m service --config config/local.json rulings` | 列出已验证且未决胜的局和场次 |
+| 裁定单局胜方 | `.venv/bin/python -B -m service --config config/local.json rule game run-1.1 team001 "主办方核定理由"` | 当前执行通过复核且待裁定 |
+| 裁定整场胜方 | `.venv/bin/python -B -m service --config config/local.json rule duel duel-1 team001 "主办方核定理由"` | 正式对决的六局生效后累计指标全同 |
+
+主办方在后台 **决赛资格判负** 选择未结算的正式决赛场次、一支或两支判负队伍并填写理由。Contest 按 6 局登记整场胜负，保留已生效单局并关闭剩余调度。Portal 按原接口查询胜方、判负队伍及理由。
+
+### 独立压测
+
+1. 在后台 **独立压测** 填写新批次编号（例如 `load-trial-1`），上传包含至少两支已准备好固定提交的队伍的 XLSX，再点击 **启动压测**。名单与正式初赛使用相同表头，地图使用初赛地图池。
+2. 在 **查看批次** 选择编号，查看场次与预定局进度、用时和每分钟结算场次。平台故障排除后可在该批次内重跑作废的执行。需裁定时从 **人工裁定** 按批次辨认场次。
+3. 全部场次结算后，该批次显示 **压测完成**。也可点击 **结束压测**，关闭未结算场次并保留已有结果、用时和吞吐量。
+4. 同一编号和名单可重复提交以打开原批次。用不同编号进行下一轮。
+
+压测时段与正式初赛、决赛分开。正式进度、排名、确认、XLSX 导出和 Portal 查询只使用正式赛果。
 
 ## 运行测试
 
-在 `contest/` 目录运行 L0 或全部测试。集成测试使用本机 HTTP 夹具和临时归档，覆盖 HTTP 幂等、构建失败与平台故障、归档复核和初赛 XLSX 往返。加 `--list` 查看所选用例。
+在 `contest/` 目录运行 L0 或全部测试。集成测试使用本机 HTTP 夹具和临时归档，覆盖 HTTP 幂等、归档复核、人工裁定与资格判负、压测批次结束与隔离、数据库写锁恢复和初赛 XLSX 往返。加 `--list` 查看所选用例。
 
 ```sh
 .venv/bin/python -B -m tests --level L0

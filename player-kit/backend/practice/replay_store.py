@@ -1,4 +1,5 @@
 """Index and store replays from the shared practice directory and bundled samples."""
+from functools import lru_cache
 import os
 from pathlib import Path
 import re
@@ -28,6 +29,24 @@ def _read_json(path):
     return json_object(path.read_bytes())
 
 
+def _playable_replay(raw):
+    replay = json_object(raw)
+    if (replay.get('format') != FORMAT or replay.get('stage') != 'prelim'
+            or not isinstance(replay.get('frames'), list)):
+        raise ValueError('请输入 arena-replay/2 格式的初赛回放')
+    if not isinstance(replay.get('map'), dict) or not isinstance(replay.get('init'), dict):
+        raise ValueError('回放缺少地图或初始局面')
+    return replay
+
+
+def publish_replay(path, replay):
+    """Expose the complete replay with a single rename on the same filesystem."""
+    with TemporaryDirectory(prefix='.replay-', dir=path.parent) as temporary:
+        staged = Path(temporary) / path.name
+        staged.write_text(dumps(replay), encoding='utf-8')
+        staged.replace(path)
+
+
 def verify_replay_file(path, *, map_file=None, map_sha256=None):
     if (map_file is None) != (map_sha256 is None):
         raise ValueError('核对封存地图时请同时提供 --map-file 和 --map-sha256')
@@ -39,10 +58,12 @@ def verify_replay_file(path, *, map_file=None, map_sha256=None):
     return game_result(verify_replay(replay, board=board, require_public=True))
 
 
-def _replay_metadata(replay):
+@lru_cache(maxsize=256)
+def _replay_metadata(path, modified, size, inode):
+    # File identity is part of the cache key so replacements refresh the listing.
+    replay = _playable_replay(path.read_bytes())
     result = replay['result'] if isinstance(replay.get('result'), dict) else {}
-    board = replay['map'] if isinstance(replay.get('map'), dict) else {}
-    return dict(map=board.get('id'), players=replay.get('players'), stage=replay.get('stage'),
+    return dict(map=replay['map'].get('id'), players=replay.get('players'), stage=replay['stage'],
                 **{key: result.get(key) for key in ('score', 'winner', 'reason', 'turns')})
 
 
@@ -54,91 +75,49 @@ class ReplayStore:
     def __init__(self, override=None, *, kit=KIT_ROOT):
         self.root = data_directory(override)
         self.samples = kit / 'replays'
-        legacy = kit / 'runs'
-        self.roots = tuple(dict.fromkeys((self.root, legacy / 'server', legacy)))
 
-    def list_replays(self):
-        samples = []
-        for path in sorted(self.samples.glob('*.json')):
-            rid = 'smp-' + path.stem
-            if _valid_id(rid):
-                try:
-                    samples.append(dict(_replay_metadata(_read_json(path)), id=rid, source='sample'))
-                except (OSError, ValueError, RecursionError):
-                    continue
-
-        entries = {}
-        for root in self.roots:
-            for path in (root / 'imports').glob('*.json'):
-                rid = 'imp-' + path.stem
-                if _valid_id(rid) and rid not in entries:
-                    try:
-                        fields = _read_json(path.with_suffix('.meta'))
-                    except (OSError, ValueError, RecursionError):
-                        try:
-                            fields = _replay_metadata(_read_json(path))
-                        except (OSError, ValueError, RecursionError):
-                            continue
-                    entries[rid] = dict(fields, id=rid, source='import')
-            if not root.is_dir():
-                continue
-            for path in root.iterdir():
-                rid = path.name
-                if (rid in entries or not _valid_id(rid) or rid.startswith(('smp-', 'imp-'))
-                        or not (path / 'replay.json').is_file()):
-                    continue
-                try:
-                    result = _read_json(path / 'result.json')
-                except (OSError, ValueError, RecursionError):
-                    continue
-                fields = {key: result.get(key) for key in ('map', 'players', 'score', 'winner', 'reason', 'turns', 'stage')}
-                entries[rid] = dict(fields, id=rid, source='local')
-        return samples + [entries[rid] for rid in sorted(entries, reverse=True)]
-
-    def _local_path(self, relative):
-        for root in self.roots:
-            path = root / relative
-            if path.is_file():
-                return path
-        return self.root / relative
-
-    def replay_path(self, rid):
+    def _location(self, rid):
         if not _valid_id(rid):
             raise KeyError(rid)
         if rid.startswith('imp-'):
-            return self._local_path(Path('imports') / (rid[4:] + '.json'))
+            return self.root / 'imports' / (rid[4:] + '.json'), 'import'
         if rid.startswith('smp-'):
-            return self.samples / (rid[4:] + '.json')
-        return self._local_path(Path(rid) / 'replay.json')
+            return self.samples / (rid[4:] + '.json'), 'sample'
+        return self.root / rid / 'replay.json', 'local'
+
+    def list_replays(self):
+        samples = sorted('smp-' + path.stem for path in self.samples.glob('*.json'))
+        saved = ['imp-' + path.stem for path in (self.root / 'imports').glob('*.json')]
+        if self.root.is_dir():
+            saved.extend(path.name for path in self.root.iterdir()
+                         if not path.name.startswith(('smp-', 'imp-')) and (path / 'replay.json').is_file())
+        entries = []
+        for rid in samples + sorted(saved, reverse=True):
+            try:
+                path, source = self._location(rid)
+                stat = path.stat()
+                fields = _replay_metadata(path, stat.st_mtime_ns, stat.st_size, stat.st_ino)
+            except (OSError, KeyError, ValueError, RecursionError):
+                continue
+            entries.append(dict(fields, id=rid, source=source))
+        return entries
 
     def stderr_path(self, rid, seat):
         if not _valid_id(rid):
             raise KeyError(rid)
-        return self._local_path(Path(rid) / f'p{seat}.stderr.log')
+        return self.root / rid / f'p{seat}.stderr.log'
 
     def load_replay(self, rid):
-        return _read_json(self.replay_path(rid))
+        path, _ = self._location(rid)
+        try:
+            return _playable_replay(path.read_bytes())
+        except FileNotFoundError as error:
+            raise KeyError(rid) from error
 
     def import_replay(self, raw):
-        replay = json_object(raw)
-        if (replay.get('format') != FORMAT or replay.get('stage') != 'prelim'
-                or not isinstance(replay.get('frames'), list)):
-            raise ValueError('请输入 arena-replay/2 格式的初赛回放')
-        if not isinstance(replay.get('map'), dict) or not isinstance(replay.get('init'), dict):
-            raise ValueError('回放缺少地图或初始局面')
+        replay = _playable_replay(raw)
         rid = time.strftime('%m%d-%H%M%S') + '-' + secrets.token_hex(8)
         directory = self.root / 'imports'
         directory.mkdir(parents=True, exist_ok=True)
-        with TemporaryDirectory(prefix='import-', dir=directory) as temp:
-            staged = Path(temp) / (rid + '.json')
-            staged.write_text(dumps(replay), encoding='utf-8')
-            metadata = staged.with_suffix('.meta')
-            metadata.write_text(dumps(_replay_metadata(replay)), encoding='utf-8')
-            destination = directory / metadata.name
-            metadata.replace(destination)
-            try:
-                staged.replace(directory / staged.name)
-            except OSError:
-                destination.unlink(missing_ok=True)
-                raise
+        publish_replay(directory / (rid + '.json'), replay)
         return 'imp-' + rid

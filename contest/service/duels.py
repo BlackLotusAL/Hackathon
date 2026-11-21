@@ -2,12 +2,13 @@
 from datetime import datetime, timedelta
 import json
 import secrets
+from typing import NamedTuple, Optional
 
 from engine.core import TIEBREAK_METRICS, compare_metrics
 from engine.mapgen import load_map
 from engine.protocol import json_object
 
-from .domain import BASELINES, DUEL_ID, TEAM_ID, ZONE, ContestError, canonical_id, encode
+from .domain import BASELINES, DUEL_ID, DUEL_TIE_ISSUE, OFFICIAL_BATCH, TEAM_ID, ZONE, ContestError, encode
 
 
 FORMAL_MAPS = 3
@@ -62,11 +63,11 @@ def insert_attempt(connection, game, attempt):
     return run_id
 
 
-def insert_plan(connection, kind, body, maps):
+def insert_plan(connection, kind, body, maps, *, batch_id=None):
     """Persist the duel, its immutable game plan and the first attempts together."""
     duel = connection.execute(
-        'INSERT INTO duels (duel_id, submission, kind) VALUES (?, ?, ?)',
-        (body['duel_id'], encode(body), kind),
+        'INSERT INTO duels (duel_id, submission, kind, batch_id) VALUES (?, ?, ?, ?)',
+        (body['duel_id'], encode(body), kind, batch_id),
     ).lastrowid
     sides = (encode(body['sides']), encode(body['sides'][::-1]))
     ordinal = 0
@@ -87,42 +88,70 @@ def _validate_duel_id(duel_id):
         raise ContestError(400, 'INVALID_DUEL', '对决编号或赛段无效')
 
 
-def _require_duel(connection, duel_id):
+def require_duel(connection, duel_id, *, public=False):
     _validate_duel_id(duel_id)
     duel = connection.execute('SELECT * FROM duels WHERE duel_id = ?', (duel_id,)).fetchone()
-    if duel is None:
+    if duel is None or (public and duel['batch_id'] not in (None, OFFICIAL_BATCH)):
         raise ContestError(404, 'DUEL_NOT_FOUND', '对决不存在')
     return duel
 
 
+class EffectiveGame(NamedTuple):
+    ordinal: int
+    run_id: str
+    manifest: dict
+    ruling: Optional[dict] = None
+
+    @classmethod
+    def from_row(cls, row):
+        return cls(row['ordinal'], row['run_id'], json.loads(row['manifest']),
+                   json.loads(row['ruling']) if row['ruling'] is not None else None)
+
+    @property
+    def teams(self):
+        return tuple(bot['team_id'] for bot in self.manifest['bots'])
+
+    @property
+    def winner(self):
+        if self.ruling is not None:
+            return self.ruling['winner']
+        return self.teams[self.manifest['result']['winner']]
+
+    def summary(self):
+        result = {'ordinal': self.ordinal, 'run_id': self.run_id, 'winner': self.winner,
+                  'score': dict(zip(self.teams, self.manifest['result']['score']))}
+        if self.ruling is not None:
+            result['reason'] = self.ruling['reason']
+        return result
+
+
+def _reviewed_attempts(connection, duel):
+    return connection.execute('''
+        SELECT g.ordinal, r.run_id, r.review, r.manifest, r.ruling
+        FROM games g JOIN current_runs r ON r.game = g.id WHERE g.duel = ? ORDER BY g.ordinal
+    ''', (duel,))
+
+
 def _game_results(connection, duel, run_ids):
-    if not run_ids:
-        return []
     effective_ids = set(run_ids)
-    games = []
-    for row in connection.execute('''
-        SELECT g.ordinal, r.run_id, r.manifest FROM games g JOIN runs r ON r.game = g.id
-        WHERE g.duel = ? AND r.review = 'effective' ORDER BY g.ordinal
-    ''', (duel,)):
-        if row['run_id'] in effective_ids:
-            manifest = json.loads(row['manifest'])
-            teams = [bot['team_id'] for bot in manifest['bots']]
-            result = manifest['result']
-            games.append({'ordinal': row['ordinal'], 'run_id': row['run_id'],
-                          'winner': teams[result['winner']], 'score': dict(zip(teams, result['score']))})
-    return games
+    return [EffectiveGame.from_row(row).summary() for row in _reviewed_attempts(connection, duel)
+            if row['review'] == 'effective' and row['run_id'] in effective_ids]
+
+
+def effective_run_ids(connection, duel):
+    return [row['run_id'] for row in _reviewed_attempts(connection, duel) if row['review'] == 'effective']
 
 
 def _previous_duel_ids(connection, duel, sides):
     """Return each side's closest earlier settlement in the same ladder."""
-    remaining = {canonical_id(side) for side in sides}
+    remaining = set(sides)
     previous_ids = []
     for previous in connection.execute('''
         SELECT duel_id, submission FROM duels
         WHERE kind = ? AND confirmed_order < ? AND result IS NOT NULL ORDER BY confirmed_order DESC
     ''', (duel['kind'], duel['confirmed_order'])):
         previous_sides = json.loads(previous['submission'])['sides']
-        shared = remaining.intersection(map(canonical_id, previous_sides))
+        shared = remaining.intersection(previous_sides)
         if shared:
             previous_ids.append(previous['duel_id'])
             remaining.difference_update(shared)
@@ -143,12 +172,14 @@ class DuelService:
         except ValueError as error:
             raise ContestError(400, 'INVALID_DUEL', '请求含无效 JSON 数值') from error
         with self.database.transaction() as connection:
-            existing = connection.execute('SELECT submission FROM duels WHERE duel_id = ?', (duel_id,)).fetchone()
-            if existing is not None and existing['submission'] == submission:
-                return
-            kind = _duel_kind(body)
+            existing = connection.execute(
+                'SELECT submission, batch_id FROM duels WHERE duel_id = ?', (duel_id,),
+            ).fetchone()
             if existing is not None:
+                if existing['batch_id'] in (None, OFFICIAL_BATCH) and existing['submission'] == submission:
+                    return
                 raise ContestError(409, 'DUEL_CONFLICT', '同一对决编号的请求内容冲突')
+            kind = _duel_kind(body)
             if kind.endswith('-ladder'):
                 seed = body['map_seed']
                 maps = [{'seed': secrets.randbelow(999999) + 1 if seed == 'random' else seed}]
@@ -158,12 +189,12 @@ class DuelService:
 
     def status(self, duel_id):
         with self.database.transaction(write=False) as connection:
-            duel = _require_duel(connection, duel_id)
+            duel = require_duel(connection, duel_id, public=True)
             return {'duel_id': duel_id, 'state': 'in_progress' if duel['result'] is None else 'finished'}
 
     def result(self, duel_id):
         with self.database.transaction(write=False) as connection:
-            duel = _require_duel(connection, duel_id)
+            duel = require_duel(connection, duel_id, public=True)
             sides = json.loads(duel['submission'])['sides']
             if duel['result'] is None:
                 return {'duel_id': duel_id, 'side_results': dict.fromkeys(sides, 'pending'), 'result': None}
@@ -179,18 +210,21 @@ class DuelService:
 
     def show(self, duel_id):
         with self.database.transaction(write=False) as connection:
-            duel = _require_duel(connection, duel_id)
+            duel = require_duel(connection, duel_id)
             attempts = []
             for row in connection.execute('''
-                SELECT g.ordinal, r.run_id, r.submission, r.arena_result, r.review, r.issue
+                SELECT g.ordinal, r.run_id, r.submission, r.arena_result, r.review, r.issue, r.ruling
                 FROM games g JOIN runs r ON r.game = g.id
                 WHERE g.duel = ? ORDER BY g.ordinal, r.attempt
             ''', (duel['id'],)):
                 record = dict(row)
-                if record['arena_result'] is not None:
-                    record['arena_result'] = json.loads(record['arena_result'])
+                for field in ('arena_result', 'ruling'):
+                    if record[field] is not None:
+                        record[field] = json.loads(record[field])
                 attempts.append(record)
-            return {'duel_id': duel_id, 'issue': duel['issue'], 'attempts': attempts,
+            return {'duel_id': duel_id, 'batch_id': duel['batch_id'], 'attempts': attempts,
+                    'issue': DUEL_TIE_ISSUE if duel['awaiting_ruling'] else None,
+                    'ruling': json.loads(duel['ruling']) if duel['ruling'] is not None else None,
                     'result': json.loads(duel['result']) if duel['result'] is not None else None}
 
 
@@ -201,33 +235,30 @@ def forfeit_result(sides, scheduled, defeated, runs):
             'games_lost': {team: scheduled if team in defeated else 0 for team in sides}, 'runs': runs}
 
 
-def settle(sides, ladder, runs, *, build_failure=None):
+def settle(sides, ladder, games, *, build_failure=None, ruling=None):
     """Return the result or keep the duel open while awaiting games or a ruling."""
     scheduled = LADDER_GAMES if ladder else FORMAL_GAMES
-    run_ids = [run_id for run_id, _ in runs]
+    run_ids = [game.run_id for game in games]
     if build_failure is not None:
         run_id, manifest = build_failure
         failed = {bot['team_id'] for bot in manifest['bots'] if bot['state'] == 'failed'}
         return dict(forfeit_result(sides, scheduled, failed, run_ids), build_run_id=run_id)
-    if len(runs) != scheduled:
+    if len(games) != scheduled:
         return None
 
     won = dict.fromkeys(sides, 0)
     lost = won.copy()
     totals = {key: [0, 0] for key in TIEBREAK_METRICS}
-    for _, manifest in runs:
-        single = manifest['result']
-        if single['winner'] is None:
-            return None
-        for seat, bot in enumerate(manifest['bots']):
-            team = bot['team_id']
-            if seat == single['winner']:
+    for game in games:
+        winner = game.winner
+        for seat, team in enumerate(game.teams):
+            if team == winner:
                 won[team] += 1
             else:
                 lost[team] += 1
             side = sides.index(team)
             for key in totals:
-                totals[key][side] += single[key][seat]
+                totals[key][side] += game.manifest['result'][key][seat]
 
     result = {'games_won': won, 'games_lost': lost, 'runs': run_ids}
     a, b = sides
@@ -238,40 +269,38 @@ def settle(sides, ladder, runs, *, build_failure=None):
     winner, metric = compare_metrics(totals)
     if winner is not None:
         return dict(result, outcome='win', winner=sides[winner], tiebreak=metric)
-    return None
+    if ruling is not None:
+        return dict(result, outcome='win', winner=ruling['winner'], reason=ruling['reason'])
 
 
-def save_result(connection, duel, result):
+def save_result(connection, duel, result, *, ruling=None):
     connection.execute('''
-        UPDATE duels SET result = ?, issue = NULL,
+        UPDATE duels SET result = ?, awaiting_ruling = 0, closed_at = ?, ruling = ?,
             confirmed_order = (SELECT COALESCE(MAX(confirmed_order), 0) + 1 FROM duels)
         WHERE id = ?
-    ''', (encode(result), duel))
+    ''', (encode(result), datetime.now(ZONE).isoformat(timespec='microseconds'),
+          encode(ruling) if ruling is not None else None, duel))
 
 
-def settle_duel(connection, duel_id):
+def settle_duel(connection, duel_id, *, ruling=None):
     """Settle against the current attempts in the same transaction as review."""
     duel = connection.execute('SELECT * FROM duels WHERE id = ?', (duel_id,)).fetchone()
     ladder = duel['kind'].endswith('-ladder')
     effective, build_failure = [], None
     prior_effective = True
-    for row in connection.execute('''
-        SELECT r.run_id, r.review, r.manifest FROM current_runs r JOIN games g ON g.id = r.game
-        WHERE g.duel = ? ORDER BY g.ordinal
-    ''', (duel['id'],)):
+    for row in _reviewed_attempts(connection, duel_id):
         if row['review'] == 'effective':
-            effective.append((row['run_id'], json.loads(row['manifest'])))
+            effective.append(EffectiveGame.from_row(row))
         else:
             if prior_effective and row['review'] == 'build_failed':
                 build_failure = row['run_id'], json.loads(row['manifest'])
             prior_effective = False
 
     sides = json.loads(duel['submission'])['sides']
-    result = settle(sides, ladder, effective, build_failure=build_failure)
+    result = settle(sides, ladder, effective, build_failure=build_failure, ruling=ruling)
     if result is None:
-        if len(effective) == (LADDER_GAMES if ladder else FORMAL_GAMES):
-            connection.execute('UPDATE duels SET issue = ? WHERE id = ?',
-                               ('整场四项累计指标全同，待主办方处理', duel['id']))
+        if len(effective) == FORMAL_GAMES:
+            connection.execute('UPDATE duels SET awaiting_ruling = 1 WHERE id = ?', (duel_id,))
         return
     if ladder:
         row = connection.execute('''
@@ -283,4 +312,4 @@ def settle_duel(connection, duel_id):
             latest = datetime.fromisoformat(json.loads(row['result'])['ended_at'])
             ended = max(ended, latest + timedelta(microseconds=1))
         result.update(started_at=duel['started_at'], ended_at=ended.isoformat(timespec='microseconds'))
-    save_result(connection, duel['id'], result)
+    save_result(connection, duel_id, result, ruling=ruling)

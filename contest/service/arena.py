@@ -1,6 +1,6 @@
 """Arena HTTP transport and run status contract."""
 from http.client import HTTPConnection, HTTPException
-from urllib.parse import quote, urlsplit
+from urllib.parse import urlsplit
 
 from engine.protocol import dumps, json_object
 
@@ -51,12 +51,9 @@ class ArenaClient:
         status, _ = self._request('POST', '/arena/v1/runs', request)
         return status
 
-    def lookup(self, run_id):
-        return self._request('GET', '/arena/v1/runs/' + quote(run_id, safe=''))
-
-    def lookup_batch(self, run_ids):
+    def query_runs(self, run_ids):
         if not 1 <= len(run_ids) <= RUN_QUERY_BATCH_SIZE:
-            raise ValueError('Arena 批量查询须包含 1 至 100 个执行编号')
+            raise ValueError('Arena 执行查询须包含 1 至 100 个执行编号')
         return self._request('POST', '/arena/v1/runs/query', {'run_ids': list(run_ids)})
 
     def status(self):
@@ -76,23 +73,23 @@ def run_observation(run_id, payload):
     return None
 
 
-def batch_lookups(run_ids, payload):
-    """Require a complete partition of the requested IDs before accepting a batch."""
+def run_query_results(run_ids, payload):
+    """Return the response by ID, with None values for explicitly missing executions."""
     if not isinstance(payload, dict):
-        return {}
+        return None
     runs, missing = payload.get('runs'), payload.get('missing_run_ids')
     if not isinstance(runs, list) or not isinstance(missing, list):
-        return {}
-    remaining, lookups = set(run_ids), {}
+        return None
+    remaining, results = set(run_ids), {}
     for run in runs:
         run_id = run.get('run_id') if isinstance(run, dict) else None
         if not isinstance(run_id, str) or run_id not in remaining:
-            return {}
+            return None
         remaining.remove(run_id)
-        lookups[run_id] = (200, run)
+        results[run_id] = run
     for run_id in missing:
         if not isinstance(run_id, str) or run_id not in remaining:
-            return {}
+            return None
         remaining.remove(run_id)
-        lookups[run_id] = (404, None)
-    return lookups if not remaining else {}
+        results[run_id] = None
+    return results if not remaining else None

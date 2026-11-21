@@ -48,6 +48,8 @@ C++ 和 Java 的本地构建使用 Docker 与 Buildx。首次构建或缓存缺�
 
 单局产生 `result.json`、`replay.json` 和 `log.jsonl`。循环赛写入 `tournament_*.json`，网页导入的回放保存在 `imports/`。用 `match --out` 指定单局输出目录后，可在网页中导入该目录里的 `replay.json`。
 
+网页从所选数据目录读取本地和导入回放，并从材料包的 `replays/` 读取示例。列表摘要、播放与从指定回合继续均使用同一份回放。实时对局在取得初始局面后显示，连接中断时会重新取得对局快照。
+
 ## 复核回放
 
 在材料包根目录运行以下命令。复核正式对局时，把示例路径换成已下载的 `replay.json`，使用与回放对应的版本。复核在本机读取回放文件并重算赛果。
@@ -67,3 +69,12 @@ python -m exposure verify-replay replays/R104_bot003_vs_bot002.json
 | `frontend/` | 浏览器里的练习界面 |
 
 `python -m exposure` 通过 `exposure.py` 解析参数和输出结果。命令行与网页共用后端的对局和循环赛逻辑。
+
+## 回归测试
+
+在材料包根目录验证回放存储、事件快照和浏览器端初始化。浏览器端用例使用 Node.js 自带的测试运行器。
+
+```sh
+python -B -m unittest discover -s tests
+node --test tests/test_live_player.js
+```

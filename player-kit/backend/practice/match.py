@@ -12,7 +12,7 @@ from game_core.rules import ENGINE_VERSION, Game, PARAMS
 
 from ..runtime.local import bot_name, make_bot
 from .catalog import load_maps
-from .replay_store import data_directory, new_run_directory
+from .replay_store import data_directory, new_run_directory, publish_replay
 
 
 class Match:
@@ -136,10 +136,9 @@ class Match:
         res.update({'map': self.board['id'], 'stage': g.stage, 'players': self.names, 'errors': list(errors),
                     'match_id': self.mid})
         if self.out_dir:
-            with (self.out_dir / 'replay.json').open('w', encoding='utf-8') as f:
-                f.write(dumps(data))
             with (self.out_dir / 'result.json').open('w', encoding='utf-8') as f:
                 json.dump(res, f, ensure_ascii=False, indent=1)
+            publish_replay(self.out_dir / 'replay.json', data)
         self.status = 'done'
         self.result = res
         return res

@@ -1,7 +1,7 @@
 """Exercise the public package commands against real files and persisted state."""
 import json
 
-from .helpers import TEAMS, WorkspaceFixture, case, run_module
+from .helpers import TEAMS, WorkspaceFixture, case, run_module, run_query_payload
 
 from engine.mapgen import validate
 from service.application import Contest
@@ -59,7 +59,7 @@ class EntrypointTests(WorkspaceFixture):
         contest.runs.complete_submission(replacement, 202)
         poll = contest.runs.claim_poll()
         self.assertEqual(poll.run_id, replacement)
-        contest.runs.complete_poll(poll, 200, {'run_id': replacement, 'state': 'finished'})
+        contest.runs.complete_polls((poll,), 200, run_query_payload({'run_id': replacement, 'state': 'finished'}))
         contest.runs.complete_review(replacement, 'held', issue='等待复核归档')
         run_module('service', '--db', db, 'recheck', replacement)
         request, outcome, _ = contest.runs.next_review()

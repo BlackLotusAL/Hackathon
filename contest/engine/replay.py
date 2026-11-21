@@ -72,7 +72,8 @@ class Recorder(object):
         self.data = {
             'format': FORMAT,
             'map': replay_map(m),
-            'stage': game.stage, 'players': list(players), 'params': dict(PARAMS),
+            'stage': game.stage, 'players': list(players),
+            'params': dict(PRELIM_PARAMS if game.stage == 'prelim' else PARAMS),
             'init': init, 'frames': [], 'result': None,
         }
 
@@ -107,23 +108,6 @@ class VerificationError(ValueError):
     pass
 
 
-ENGINES = {ENGINE_VERSION: Game}
-
-
-class Version2Game(Game):
-    """Version 2 used the same board rules with a seat fallback on equal metrics."""
-    decided_by_seat = False
-
-    def decide(self):
-        winner, reason = super().decide()
-        if winner is None:
-            self.decided_by_seat = True
-            return 1, 'seat'
-        return winner, reason
-
-
-LEGACY_ENGINE_VERSION = 'exposure-field/2'
-ENGINES[LEGACY_ENGINE_VERSION] = Version2Game
 COMMAND = re.compile(r'[UDLR]\+?')
 
 
@@ -152,6 +136,8 @@ def _exits(observation):
 
 def _observations(replay, log):
     recorded = replay.get('observations')
+    if not isinstance(recorded, list) or len(recorded) < 2:
+        raise VerificationError('回放缺少完整的裁判观测')
     if log is not None:
         observed = []
         for entry in log:
@@ -161,13 +147,9 @@ def _observations(replay, log):
                     raise VerificationError('裁判观测的退出信息无效')
             public = public_observation(entry)
             observed.append(dict(public, exits=_exits(public)))
-        if 'observations' in replay:
-            projected = [dict(public_observation(entry), exits=_exits(entry)) for entry in recorded]
-            if _json(projected) != _json(observed):
-                raise VerificationError('回放观测与裁判日志不符')
-        recorded = observed
-    if not isinstance(recorded, list) or len(recorded) < 2:
-        raise VerificationError('回放缺少完整的裁判观测')
+        projected = [dict(public_observation(entry), exits=_exits(entry)) for entry in recorded]
+        if _json(projected) != _json(observed):
+            raise VerificationError('回放观测与裁判日志不符')
     if recorded[0].get('phase') != 'startup' or recorded[-1].get('phase') != 'end':
         raise VerificationError('裁判观测必须按开局、回合、终止排列')
     return recorded
@@ -221,25 +203,15 @@ def _recompute(replay, game, observed, log):
     check_fields(replay['result'], game_result(game), '回放结果')
 
 
-def verify_replay(replay, *, engine_version=None, board=None, log=None, require_public=False,
-                  allow_public_prelim=False):
-    """Verify and return the final game state. A referee log can supply observations."""
+def verify_replay(replay, *, board=None, log=None):
+    """Recompute the public replay and cross-check the referee log when supplied."""
     try:
         if replay['format'] != FORMAT or replay['stage'] not in ('prelim', 'final'):
             raise VerificationError('回放格式或赛段无效')
-        published = replay.get('engine_version')
-        version = published if engine_version is None else engine_version
-        if version not in ENGINES:
+        version = replay.get('engine_version')
+        if version != ENGINE_VERSION:
             raise VerificationError(f'无可用的同版引擎 {version}')
-        if 'engine_version' in replay and published != version:
-            raise VerificationError('回放与归档结果的引擎版本不符')
-        if require_public and (published is None or not isinstance(replay.get('observations'), list)):
-            raise VerificationError('正式回放缺少引擎版本或观测')
-        params = replay['params']
-        expected_params = PARAMS
-        if (allow_public_prelim and version == ENGINE_VERSION and replay['stage'] == 'prelim'
-                and isinstance(params, dict) and params.keys() == PRELIM_PARAMS.keys()):
-            expected_params = PRELIM_PARAMS
+        expected_params = PRELIM_PARAMS if replay['stage'] == 'prelim' else PARAMS
         check_fields(replay, {'params': expected_params}, '回放')
         if board is None:
             board = replay['map']
@@ -247,7 +219,7 @@ def verify_replay(replay, *, engine_version=None, board=None, log=None, require_
                 raise VerificationError('回放地图无效')
         else:
             check_fields(replay, {'map': replay_map(board), 'stage': board['stage']}, '回放')
-        game = ENGINES[version](board, stage=replay['stage'])
+        game = Game(board, stage=replay['stage'])
         _recompute(replay, game, _observations(replay, log), log)
         return game
     except (AttributeError, IndexError, KeyError, TypeError) as error:

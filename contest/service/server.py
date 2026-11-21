@@ -14,17 +14,20 @@ from engine.protocol import dumps, json_object
 from .application import Contest, ContestWorker
 from .arena import ArenaClient
 from .config import IPWhitelist
+from .database import DatabaseStopping
 from .domain import RUN_ID, ContestError
 from .duels import load_pools
 from .workbook import MAX_UPLOAD, MIME
 
 
 DUEL_QUERY = re.compile(r'/contest/v1/duels/([^/]+)/(status|result)')
+LOAD_TEST_RESOURCE = re.compile(r'/admin/load-tests/([^/]+)(?:/(retry|stop))?')
 
 
 class Admin:
-    def __init__(self, preliminary, user, password, arena=None):
-        self.preliminary, self.arena = preliminary, arena
+    def __init__(self, contest, user, password, arena=None):
+        self.preliminary, self.rulings = contest.preliminary, contest.rulings
+        self.user, self.arena = user, arena
         self.credentials = b64encode(f'{user}:{password}'.encode('utf-8'))
         self.page = Path(__file__).with_name('admin.html').read_bytes()
 
@@ -55,9 +58,15 @@ class Admin:
         queries = {
             '/admin/prelim/progress': self.preliminary.progress,
             '/admin/prelim/standings': self.preliminary.standings,
+            '/admin/load-tests': self.preliminary.load_tests,
+            '/admin/rulings': self.rulings.pending,
+            '/admin/final/forfeits': self.rulings.forfeitable_finals,
         }
         if path in queries:
             return http.reply(200, queries[path]())
+        load_test = LOAD_TEST_RESOURCE.fullmatch(path)
+        if load_test and load_test[2] is None:
+            return http.reply(200, self.preliminary.load_test_progress(unquote(load_test[1])))
         if path == '/admin/prelim/results.xlsx':
             return self.workbook(http, self.preliminary.export_results(), '初赛结果.xlsx', 'prelim-results.xlsx')
         if path == '/admin/arena/status':
@@ -78,15 +87,37 @@ class Admin:
             data = http.read_body(MAX_UPLOAD, 'INVALID_ROSTER', '请选择 XLSX 队伍名单')
             return http.reply(200, self.preliminary.import_roster(data))
         if path == '/admin/prelim/retry':
-            body = http.read_json('INVALID_RUN_ID', '请选择要重跑的执行')
-            run_id = body.get('run_id')
-            if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
-                raise ContestError(400, 'INVALID_RUN_ID', '请选择要重跑的执行')
-            return http.reply(200, self.preliminary.retry(run_id))
+            return self.retry(http)
         if path == '/admin/prelim/withdraw':
             body = http.read_json('INVALID_WITHDRAWAL', '请选择退赛队伍')
             return http.reply(200, self.preliminary.withdraw(body.get('teams')))
+        if path == '/admin/rulings':
+            body = http.read_json('INVALID_RULING', '请填写裁定范围、编号、胜方和理由')
+            ruling = self.rulings.record(body.get('scope'), body.get('target'), body.get('winner'),
+                                         body.get('reason'), operator=self.user)
+            return http.reply(200, ruling)
+        if path == '/admin/final/forfeits':
+            body = http.read_json('INVALID_FORFEIT', '请填写决赛场次、判负队伍和理由')
+            ruling = self.rulings.forfeit_final(body.get('duel_id'), body.get('defeated'), body.get('reason'),
+                                                operator=self.user)
+            return http.reply(200, ruling)
+        load_test = LOAD_TEST_RESOURCE.fullmatch(path)
+        if load_test:
+            batch_id = unquote(load_test[1])
+            if load_test[2] == 'retry':
+                return self.retry(http, load_test_id=batch_id)
+            if load_test[2] == 'stop':
+                return http.reply(200, self.preliminary.stop_load_test(batch_id))
+            data = http.read_body(MAX_UPLOAD, 'INVALID_ROSTER', '请选择 XLSX 压测名单')
+            return http.reply(200, self.preliminary.start_load_test(batch_id, data))
         raise ContestError(404, 'NOT_FOUND', '接口不存在')
+
+    def retry(self, http, *, load_test_id=None):
+        body = http.read_json('INVALID_RUN_ID', '请选择要重跑的执行')
+        run_id = body.get('run_id')
+        if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
+            raise ContestError(400, 'INVALID_RUN_ID', '请选择要重跑的执行')
+        return http.reply(200, self.preliminary.retry(run_id, load_test_id=load_test_id))
 
 
 def handler_for(contest, *, admin=None, ip_whitelist=None):
@@ -177,16 +208,22 @@ def serve(settings):
     arena = ArenaClient(settings.arena_url)
     pools = load_pools(settings.maps)
     settings.db.parent.mkdir(parents=True, exist_ok=True)
-    contest = Contest(settings.db, pools)
-    admin = (Admin(contest.preliminary, settings.admin_user, settings.admin_password, arena)
+    stop = Event()
+    contest = Contest(settings.db, pools, shutdown=stop)
+    admin = (Admin(contest, settings.admin_user, settings.admin_password, arena)
              if settings.admin_user else None)
     worker = ContestWorker(contest, settings.archive_root, arena)
-    stop = Event()
 
     def work(step):
         while not stop.is_set():
             if not step():
                 stop.wait(0.25)
+
+    def run_worker(task, *args):
+        try:
+            task(*args)
+        except DatabaseStopping:
+            return
 
     handler = handler_for(contest, admin=admin, ip_whitelist=settings.ip_whitelist)
     bind_ip = ip_address(settings.host)
@@ -201,8 +238,9 @@ def serve(settings):
         print(f'Listening http://{listen_host}:{server.server_port}', flush=True)
         print(f'Arena {settings.arena_url}', flush=True)
         steps = (worker.submit_next, worker.poll_next, worker.review_next)
-        workers = [Thread(target=work, args=(step,), daemon=True, name=step.__name__) for step in steps]
-        workers.append(Thread(target=worker.poll_preliminary, args=(stop,), daemon=True, name='poll_preliminary'))
+        workers = [Thread(target=run_worker, args=(work, step), daemon=True, name=step.__name__) for step in steps]
+        workers.append(Thread(target=run_worker, args=(worker.poll_preliminary, stop),
+                              daemon=True, name='poll_preliminary'))
         for thread in workers:
             thread.start()
         try:

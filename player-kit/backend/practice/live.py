@@ -160,10 +160,13 @@ class LiveMatch:
                 raise KeyError(f'第 {turn} 回合的调试记录（只有调试模式的对局保存请求内容）')
             return self._turns[turn]
 
-    def events_after(self, offset, timeout=0):
+    def event_snapshot(self):
         with self._condition:
-            if timeout:
-                self._condition.wait_for(lambda: len(self._events) > offset or self._finished, timeout)
+            return list(self._events), self.status()
+
+    def events_after(self, offset, timeout):
+        with self._condition:
+            self._condition.wait_for(lambda: len(self._events) > offset or self._finished, timeout)
             return self._events[offset:]
 
     def run(self):

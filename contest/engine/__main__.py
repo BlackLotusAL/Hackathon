@@ -28,7 +28,7 @@ def generate_maps(args):
 
 
 def verify_recording(args):
-    game = verify_replay(json_object(args.replay.read_bytes()), allow_public_prelim=True)
+    game = verify_replay(json_object(args.replay.read_bytes()))
     print(dumps(game_result(game)))
 
 

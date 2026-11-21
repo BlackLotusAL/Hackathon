@@ -424,7 +424,6 @@ pre.json { background: var(--bg); border: 1px solid var(--line); padding: 10px; 
   var DIRS = { U: '上', D: '下', L: '左', R: '右' };
   var MAPS = [], BOTS = [], ONLINE = false, SAMPLES = [];
   try { SAMPLES = JSON.parse($('#samples').textContent || '[]'); } catch (e) { SAMPLES = []; }
-  function stageName() { return ''; }
 
   // ============================================================ 事件文字
   var EV = {
@@ -503,7 +502,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); padding: 10px; 
   Player.prototype.destroy = function () { this.alive = false; Player.all.splice(Player.all.indexOf(this), 1); };
   Player.prototype.load = function (R, title, note) {
     this.R = R; this.N = R.map.size; this.terr = R.map.terrain.join(''); this.own = null; this.turn = 0; this.title = title; this.noteText = note;
-    this.name.textContent = R.map.id + (R.map.name && !/^随机地图/.test(R.map.name) ? ' ' + R.map.name : '') + stageName(R.stage);
+    this.name.textContent = R.map.id + (R.map.name && !/^随机地图/.test(R.map.name) ? ' ' + R.map.name : '');
     this.note.textContent = note || ''; this.note.hidden = !note;
     this.legend();
     this.seekEl.max = R.frames.length;
@@ -764,16 +763,24 @@ pre.json { background: var(--bg); border: 1px solid var(--line); padding: 10px; 
     });
     host.scrollTop = top;
   }
-  // 切换对局时，新对局先在页面外搭好、收齐数据，再一次替换旧画面，避免出现空白和逐帧重画的闪烁
+  function removePlayer(me) {
+    if (me.keyh) document.removeEventListener('keydown', me.keyh);
+    if (me.P) me.P.destroy();
+    me.keyh = me.P = null;
+  }
   function closeCur() {
     if (!cur) return;
     if (cur.es) cur.es.close();
-    if (cur.keyh) document.removeEventListener('keydown', cur.keyh);
-    if (cur.P) cur.P.destroy();
+    removePlayer(cur);
     cur = null;
   }
+  function playbackMessage(text, error) {
+    $('#stage').replaceChildren(el('div', { class: error ? 'err' : 'blank', role: error ? 'alert' : 'status', text: text }));
+    $('#logBlock').hidden = true;
+    $('#turnDetail').replaceChildren();
+  }
   function show(me, host) {
-    if (cur !== me || me.shown) return;
+    if (cur !== me || me.shown || !me.P) return;
     me.shown = true;
     var P = me.P;
     $('#stage').replaceChildren(host);
@@ -791,6 +798,7 @@ pre.json { background: var(--bg); border: 1px solid var(--line); padding: 10px; 
   function openReplay(it) {
     var get = it.data ? Promise.resolve(it.data) : api('GET', '/api/replays/' + it.id);
     var me = { id: it.id }; closeCur(); cur = me; renderList();
+    playbackMessage('正在读取回放');
     get.then(function (R) {
       if (cur !== me) return;
       var host = el('div'), P = new Player(host);
@@ -800,75 +808,128 @@ pre.json { background: var(--bg); border: 1px solid var(--line); padding: 10px; 
         el('button', { type: 'button', text: '从这一回合接着打', onclick: function () { continueFrom(it.id, P.turn); } })]));
       show(me, host);
       if (it.source === 'sample' && !ONLINE) P.start();
-    }).catch(function (e) { toast(e.message); });
+    }).catch(function (e) {
+      if (cur !== me) return;
+      removePlayer(me);
+      playbackMessage(e.message, true);
+    });
   }
   function continueFrom(id, t) {
     $('#optFrom').checked = true; $('#fromBox').hidden = false; $('#fromTurn').value = t;
     fillReplaySelect(id); toast('设置双方后点"开始对局"');
     $('#fromBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
   }
+  function resetLive(me, paused) {
+    removePlayer(me);
+    me.host = el('div');
+    me.tbody = el('tbody');
+    me.entries = {};
+    me.rows = {};
+    me.queue = me.selRow = me.header = me.pauseBtn = me.liveState = me.ended = null;
+    me.paused = paused;
+    me.shown = false;
+  }
+  function applyLiveEvent(me, event) {
+    if (event.ev === 'header') {
+      me.header = event;
+      me.P = new Player(me.host, {
+        live: true,
+        entry: function (turn) { return me.entries[turn]; },
+        onShow: function (turn) { if (me.shown) markRow(turn); }
+      });
+      me.P.load({ map: event.map, stage: event.stage, players: event.players, params: event.params,
+        init: event.init, frames: [], result: null });
+      buildControls(me, event);
+    } else if (event.ev === 'status') {
+      setPaused(me, event.status.paused);
+    } else if (event.ev === 'end') {
+      me.ended = event;
+      me.es.close();
+      if (!me.P) return;
+      me.P.finish(event.result);
+      $$('[data-live]', me.host).forEach(function (button) { button.disabled = true; });
+      if (me.keyh) {
+        document.removeEventListener('keydown', me.keyh);
+        me.keyh = null;
+      }
+      if (event.error) me.liveBox.appendChild(el('div', { class: 'err', text: event.error }));
+      if (event.result) {
+        me.liveCtl.appendChild(el('a', { href: '/api/matches/' + me.id + '/replay', download: me.id + '.json', text: '下载回放' }));
+        me.liveCtl.appendChild(el('button', { type: 'button', text: '从这一回合接着打',
+          onclick: function () { continueFrom(me.id, me.P.turn); } }));
+      }
+      me.liveState.textContent = event.error ? '运行失败' : (event.result ? '已结束' : '已停止');
+    } else if (me.P && (event.ev === 'frame' || event.ev === 'forfeit')) {
+      if (event.entry) {
+        me.entries[event.entry.turn] = event.entry;
+        addLog(me, event.entry);
+      }
+      if (event.ev === 'frame') me.P.push(event.frame);
+    }
+  }
   function openLive(id) {
     closeCur();
-    var me = { id: id, entries: {}, rows: {}, tbody: el('tbody') }, host = el('div');
+    var me = { id: id };
     cur = me; renderList();
-    var P = new Player(host, { live: true, entry: function (t) { return me.entries[t]; }, onShow: function (t) { if (me.shown) markRow(t); } });
-    me.P = P;
-    var es = new EventSource('/api/matches/' + id + '/events'); me.es = es;
-    var synced = false;
-    setTimeout(function () { show(me, host); }, 1500);           // 兜底：服务没有发出 synced 时也能显示
-    es.onmessage = function (m) {
-      if (cur !== me) return;
-      var ev = JSON.parse(m.data);
-      if (ev.ev === 'synced') { synced = true; if (me.header) show(me, host); }
-      else if (ev.ev === 'header') {
-        me.header = ev;
-        P.load({ map: ev.map, stage: ev.stage, players: ev.players, params: ev.params, init: ev.init, frames: [], result: null });
-        buildControls(P, ev);
-        if (synced) show(me, host);
-      } else if (ev.ev === 'frame') { if (ev.entry) { me.entries[ev.entry.turn] = ev.entry; addLog(ev.entry); } P.push(ev.frame); }
-      else if (ev.ev === 'forfeit') { if (ev.entry) { me.entries[ev.entry.turn] = ev.entry; addLog(ev.entry); } }
-      else if (ev.ev === 'status') { setPaused(ev.status.paused); }
-      else if (ev.ev === 'end') {
-        es.close();
-        if (ev.error && me.liveBox) me.liveBox.appendChild(el('div', { class: 'err', text: ev.error }));
-        if (P.R) P.finish(ev.result);
-        if (me.liveBox) {
-          $$('[data-live]', me.liveBox).forEach(function (b) { b.disabled = true; });
-          if (ev.result) {
-            me.liveCtl.appendChild(el('a', { href: '/api/matches/' + id + '/replay', download: id + '.json', text: '下载回放' }));
-            me.liveCtl.appendChild(el('button', { type: 'button', text: '从这一回合接着打', onclick: function () { continueFrom(id, P.turn); } }));
-          }
-          me.liveState.textContent = ev.result ? '已结束' : '已停止';
-        }
-        show(me, host);
+    playbackMessage('正在等待对局初始化');
+    var es = new EventSource('/api/matches/' + id + '/events');
+    me.es = es;
+    es.onmessage = function (message) {
+      if (cur !== me || me.ended) return;
+      var event = JSON.parse(message.data);
+      if (event.ev === 'snapshot') {
+        resetLive(me, event.status.paused);
+        event.events.forEach(function (item) { applyLiveEvent(me, item); });
+        setPaused(me, event.status.paused);
+        if (!me.P && !me.ended) playbackMessage('正在等待对局初始化');
+      } else {
+        applyLiveEvent(me, event);
+      }
+      if (me.P) show(me, me.host);
+      if (me.ended) {
+        if (!me.P) playbackMessage(me.ended.error || '对局在初始化前结束', !!me.ended.error);
         refreshList();
       }
     };
+    es.onerror = function () {
+      if (cur !== me || me.ended) return;
+      if (me.liveState && me.P) me.liveState.textContent = '正在重新连接';
+      else playbackMessage('正在重新连接对局');
+    };
   }
-  function setPaused(p) { if (cur && cur.pauseBtn) { cur.paused = p; cur.pauseBtn.textContent = p ? '继续' : '暂停'; cur.pauseBtn.setAttribute('aria-pressed', String(!!p)); if (cur.liveState && !cur.P.R.result) cur.liveState.textContent = p ? '已暂停' : '运行中'; } }
-  function control(action, ms) { return api('POST', '/api/matches/' + cur.id + '/control', { action: action, ms: ms }).then(function (s) { setPaused(s.paused); }).catch(function (e) { toast(e.message); }); }
-  function buildControls(P, h) {
-    P.extra.innerHTML = '';
-    cur.pauseBtn = el('button', { type: 'button', 'data-live': '', text: '暂停', onclick: function () { control(cur.paused ? 'resume' : 'pause'); } });
-    var items = [cur.pauseBtn,
-      el('button', { type: 'button', 'data-live': '', text: '单步', title: '暂停时前进一回合', onclick: function () { control('step'); } }),
-      el('button', { type: 'button', 'data-live': '', text: '停止', onclick: function () { control('stop'); } })];
+  function setPaused(me, paused) {
+    me.paused = paused;
+    if (!me.pauseBtn || me.ended) return;
+    me.pauseBtn.textContent = paused ? '继续' : '暂停';
+    me.pauseBtn.setAttribute('aria-pressed', String(!!paused));
+    me.liveState.textContent = paused ? '已暂停' : '运行中';
+  }
+  function control(me, action, ms) {
+    api('POST', '/api/matches/' + me.id + '/control', { action: action, ms: ms })
+      .catch(function (e) { if (cur === me) toast(e.message); });
+  }
+  function buildControls(me, h) {
+    me.pauseBtn = el('button', { type: 'button', 'data-live': '', text: '暂停',
+      onclick: function () { control(me, me.paused ? 'resume' : 'pause'); } });
+    var items = [me.pauseBtn,
+      el('button', { type: 'button', 'data-live': '', text: '单步', title: '暂停时前进一回合', onclick: function () { control(me, 'step'); } }),
+      el('button', { type: 'button', 'data-live': '', text: '停止', onclick: function () { control(me, 'stop'); } })];
     if (!h.humans.length) {
-      var pace = el('select', { 'data-live': '', 'aria-label': '对局节奏', onchange: function () { control('pace', +pace.value); } },
+      var pace = el('select', { 'data-live': '', 'aria-label': '对局节奏', onchange: function () { control(me, 'pace', +pace.value); } },
         [['0', '全速'], ['50', '每回合 +50ms'], ['200', '每回合 +200ms'], ['600', '每回合 +600ms']].map(function (o) { return el('option', { value: o[0], text: o[1] }); }));
       items.push(pace);
     }
     items.push(el('span', { class: 'gap' }));
-    [0, 1].forEach(function (s) { items.push(el('a', { href: '/api/matches/' + cur.id + '/stderr/' + s, target: '_blank', rel: 'noopener', text: SIDE[s] + '日志' })); });
-    cur.liveCtl = el('div', { class: 'ctrl' }, items);
-    cur.liveState = el('span', { text: '运行中' });
-    cur.liveBox = el('div', { class: 'live-box' }, [el('div', { class: 't' }, [el('b', { text: (h.timing ? '执行时限' : '不计时') + (h.debug ? ' · 调试模式' : '') }), cur.liveState]), cur.liveCtl]);
-    P.extra.appendChild(cur.liveBox);
-    api('GET', '/api/matches/' + cur.id).then(function (s) { setPaused(s.paused); }).catch(function () {});
-    if (h.humans.length) buildHuman(P, h);
+    [0, 1].forEach(function (s) { items.push(el('a', { href: '/api/matches/' + me.id + '/stderr/' + s, target: '_blank', rel: 'noopener', text: SIDE[s] + '日志' })); });
+    me.liveCtl = el('div', { class: 'ctrl' }, items);
+    me.liveState = el('span', { role: 'status' });
+    me.liveBox = el('div', { class: 'live-box' }, [el('div', { class: 't' }, [el('b', { text: (h.timing ? '执行时限' : '不计时') + (h.debug ? ' · 调试模式' : '') }), me.liveState]), me.liveCtl]);
+    me.P.extra.appendChild(me.liveBox);
+    setPaused(me, me.paused);
+    if (h.humans.length) buildHuman(me, h);
   }
-  function buildHuman(P, h) {
-    var tick = el('select', { 'data-live': '', 'aria-label': '每回合时长', onchange: function () { control('tick', +tick.value); } }, [['400', '每回合 0.4 秒'], ['700', '0.7 秒'], ['1200', '1.2 秒'], ['250', '0.25 秒']].map(function (o) { return el('option', { value: o[0], text: o[1] }); }));
+  function buildHuman(me, h) {
+    var tick = el('select', { 'data-live': '', 'aria-label': '每回合时长', onchange: function () { control(me, 'tick', +tick.value); } }, [['400', '每回合 0.4 秒'], ['700', '0.7 秒'], ['1200', '1.2 秒'], ['250', '0.25 秒']].map(function (o) { return el('option', { value: o[0], text: o[1] }); }));
     var pad = el('div', { class: 'keys' }), btns = {};
     [['', ''], ['U', '↑'], ['', ''], ['L', '←'], ['D', '↓'], ['R', '→']].forEach(function (k) {
       if (!k[0]) { pad.appendChild(el('span')); return; }
@@ -876,25 +937,25 @@ pre.json { background: var(--bg); border: 1px solid var(--line); padding: 10px; 
     });
     function press(c, seat) {
       Object.keys(btns).forEach(function (k) { btns[k].classList.toggle('on', k === c[0]); });
-      api('POST', '/api/matches/' + cur.id + '/human', { seat: seat == null ? h.humans[0] : seat, cmd: c }).catch(function (e) { toast(e.message); });
+      api('POST', '/api/matches/' + me.id + '/human', { seat: seat == null ? h.humans[0] : seat, cmd: c })
+        .catch(function (e) { if (cur === me) toast(e.message); });
     }
-    P.extra.appendChild(el('div', { class: 'live-box' }, [
+    me.P.extra.appendChild(el('div', { class: 'live-box' }, [
       el('div', { class: 't' }, [el('b', { text: '人工操作 · ' + h.humans.map(function (s) { return SIDE[s]; }).join('、') }), el('span', { text: (h.humans.length > 1 ? '蓝 WASD · 红 方向键' : '方向键 / WASD') + ' · Shift 走 2 格' })]),
       el('div', { class: 'row', style: 'gap:16px;align-items:flex-end' }, [pad, el('div', { class: 'ctrl' }, [tick])])
     ]));
     var map = { ArrowUp: 'U', ArrowDown: 'D', ArrowLeft: 'L', ArrowRight: 'R', w: 'U', s: 'D', a: 'L', d: 'R', W: 'U', S: 'D', A: 'L', D: 'R' };
-    cur.keyh = function (e) {
+    me.keyh = function (e) {
       if (e.target && /INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
       var c = map[e.key]; if (!c) return; e.preventDefault();
       var seat = h.humans[0];
       if (h.humans.length > 1) seat = /^Arrow/.test(e.key) ? 1 : 0;
       press(c + (e.shiftKey ? '+' : ''), seat);
     };
-    document.addEventListener('keydown', cur.keyh);
+    document.addEventListener('keydown', me.keyh);
   }
   // 回合日志：攒到下一次画面刷新时一次插入
-  function addLog(e) {
-    var me = cur;
+  function addLog(me, e) {
     if (!me.queue) { me.queue = []; requestAnimationFrame(function () { flushLog(me); }); }
     me.queue.push(e);
   }
@@ -917,7 +978,8 @@ pre.json { background: var(--bg); border: 1px solid var(--line); padding: 10px; 
   function markRow(t) { if (!cur) return; if (cur.selRow) cur.selRow.classList.remove('sel'); cur.selRow = cur.rows[t]; if (cur.selRow) cur.selRow.classList.add('sel'); }
   function showTurn(t) {
     cur.P.stop(); cur.P.follow = false; cur.P.syncFollow(); cur.P.go(t);
-    var d = $('#turnDetail'); d.innerHTML = '';
+    var d = el('div');
+    $('#turnDetail').replaceChildren(d);
     if (!cur.header.debug) return;
     api('GET', '/api/matches/' + cur.id + '/turns/' + t).then(function (r) {
       var cols = [el('div', {}, [el('div', { class: 'cap', text: 'POST …/turns/' + t + ' 请求体（双方相同）' }), el('pre', { class: 'json', text: JSON.stringify(r.request, null, 1) })])];

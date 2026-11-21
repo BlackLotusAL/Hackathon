@@ -35,12 +35,12 @@ class JudgeTests(MatchFixture):
                     self.assertEqual(len(replay['frames']), 600)
                     self.assertEqual(len(replay['observations']), 602)
                     self.assertEqual('latent' in replay['init'], stage == 'final')
+                    self.assertEqual('latent' in replay['params'], stage == 'final')
                     verified = run_module('engine', 'verify-replay', output / 'replay.json')
                     self.assertEqual(json.loads(verified.stdout), replay['result'])
                     expected = arena_archive(output, self.metadata(request))
-                    manifest, issue = review_archive(archive_root, request, 'finished', ladder=False)
+                    manifest = review_archive(archive_root, request, 'finished', ladder=False)
                     self.assertEqual(manifest, expected)
-                    self.assertIsNone(issue)
 
     @case('L0-024', '裁判无令牌任务按 rules 执行且支持显式赛段覆盖')
     def test_judge_uses_task_rules_and_explicit_stage_override(self):
@@ -72,7 +72,7 @@ class JudgeTests(MatchFixture):
             corpus.mkdir()
             output, manifest, replay = self.judge_archive(
                 request, [Bot('U', us=1001), Bot('D', us=2001)], archive_root=corpus)
-            self.assertEqual(review_archive(corpus, request, 'finished', ladder=False), (manifest, None))
+            self.assertEqual(review_archive(corpus, request, 'finished', ladder=False), manifest)
             single = manifest['result']
             log = [json_object(line) for line in (output / 'log.jsonl').read_bytes().splitlines()]
             modified_log = [dict(entry) for entry in log]
@@ -120,6 +120,7 @@ class JudgeTests(MatchFixture):
                     stored = contest.duels.show('duel-1')
                     self.assertEqual(stored['attempts'][0]['review'], 'held')
                     self.assertTrue(stored['attempts'][0]['issue'])
+                    self.assertEqual(contest.rulings.pending(), {'pending': []})
                     self.assertIsNone(stored['result'])
                     self.assertFalse(worker.submit_next())
                     self.assertFalse(worker.poll_next())

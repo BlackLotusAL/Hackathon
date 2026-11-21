@@ -63,7 +63,7 @@ class Strategy(GreedyBot):
     item_bonus = (4, 10)        # 道具周围 2 格内每格加分、道具格本身加分
 
     def value_of(self, st, got, steal, length):
-        """占位：道具预告或出现后，把它周围的格子圈进自己的图形区更划算。"""
+        """提高当前或预告道具及其周边格子的闭合估值。"""
         v = GreedyBot.value_of(self, st, got, steal, length)
         g = st.game
         it = g.boost or g.boost_next

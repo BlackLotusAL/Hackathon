@@ -8,6 +8,7 @@ from .database import Database
 from .duels import DuelService
 from .executions import ExecutionService, review_archive
 from .preliminary import Preliminary
+from .rulings import Rulings
 
 
 PRELIMINARY_POLL_INTERVAL = 10
@@ -16,12 +17,13 @@ PRELIMINARY_POLL_INTERVAL = 10
 class Contest:
     """One shared database, with explicit feature services for every caller."""
 
-    def __init__(self, path, pools=None):
-        self.database = Database(path)
+    def __init__(self, path, pools=None, *, shutdown=None):
+        self.database = Database(path, shutdown=shutdown)
         self.maps = pools or {}
         self.duels = DuelService(self.database, self.maps)
         self.runs = ExecutionService(self.database)
         self.preliminary = Preliminary(self.database, self.maps)
+        self.rulings = Rulings(self.database)
 
 
 class ContestWorker:
@@ -41,9 +43,12 @@ class ContestWorker:
         claim = self.contest.runs.claim_poll()
         if claim is None:
             return False
-        status, payload = self.arena.lookup(claim.run_id)
-        self.contest.runs.complete_poll(claim, status, payload)
+        self._poll_runs((claim,))
         return True
+
+    def _poll_runs(self, claims):
+        status, payload = self.arena.query_runs([claim.run_id for claim in claims])
+        self.contest.runs.complete_polls(claims, status, payload)
 
     def poll_preliminary_round(self, stop=None):
         targets = self.contest.runs.preliminary_poll_targets()
@@ -53,8 +58,7 @@ class ContestWorker:
             batch = targets[offset:offset + RUN_QUERY_BATCH_SIZE]
             claims = self.contest.runs.claim_preliminary_polls(batch)
             if claims:
-                status, payload = self.arena.lookup_batch([claim.run_id for claim in claims])
-                self.contest.runs.complete_preliminary_polls(claims, status, payload)
+                self._poll_runs(claims)
 
     def poll_preliminary(self, stop):
         next_round = monotonic()
@@ -75,10 +79,10 @@ class ContestWorker:
             self.contest.runs.complete_review(run_id, 'void', issue=arena_result['reason'])
             return True
         try:
-            manifest, issue = review_archive(self.archive_root, request, state, ladder=ladder)
+            manifest = review_archive(self.archive_root, request, state, ladder=ladder)
         except VerificationError as error:
             self.contest.runs.complete_review(run_id, 'held', issue=str(error))
         else:
-            review = 'held' if issue else ('effective' if state == 'finished' else 'build_failed')
-            self.contest.runs.complete_review(run_id, review, manifest=manifest, issue=issue)
+            review = 'effective' if state == 'finished' else 'build_failed'
+            self.contest.runs.complete_review(run_id, review, manifest=manifest)
         return True

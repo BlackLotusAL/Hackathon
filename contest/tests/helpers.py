@@ -219,6 +219,10 @@ class Bot:
         return self.exit_info is not None
 
 
+def run_query_payload(*runs, missing=()):
+    return {'runs': list(runs), 'missing_run_ids': list(missing)}
+
+
 @contextmanager
 def http_arena(status):
     """Record requests to the Arena API."""
@@ -235,7 +239,7 @@ def http_arena(status):
             body = self.read_json()
             self.record(body)
             if self.path.endswith('/arena/v1/runs/query'):
-                self.reply(*arena.lookup_batch(body['run_ids']))
+                self.reply(*arena.query_runs(body['run_ids']))
             else:
                 self.reply(arena.submit(body) if self.path.endswith('/arena/v1/runs') else 404)
 
@@ -243,8 +247,6 @@ def http_arena(status):
             self.record()
             if self.path.endswith('/arena/v1/status'):
                 self.reply(200, arena.status())
-            elif route := re.fullmatch(r'.*/arena/v1/runs/([^/]+)', self.path):
-                self.reply(*arena.lookup(route[1]))
             else:
                 self.reply(404)
 
@@ -266,32 +268,29 @@ def wait_for(read, condition, *, timeout=20):
 class ArenaStub:
     def __init__(self):
         self.submitted = []
-        self.batches = []
-        self.responses = {}
+        self.queries = []
+        self.states = {}
         self.summary = None
 
     def submit(self, request):
         self.submitted.append(request)
         run_id = request['run_id']
-        self.responses.setdefault(run_id, (200, {'run_id': run_id, 'state': 'queued'}))
+        self.states.setdefault(run_id, {'run_id': run_id, 'state': 'queued'})
         return 202
 
     def set_state(self, run_id, state, **fields):
-        self.responses[run_id] = 200, {'run_id': run_id, 'state': state, **fields}
+        self.states[run_id] = {'run_id': run_id, 'state': state, **fields}
 
-    def lookup(self, run_id):
-        return self.responses.get(run_id, (404, {'code': 'RUN_NOT_FOUND'}))
-
-    def lookup_batch(self, run_ids):
-        self.batches.append(list(run_ids))
+    def query_runs(self, run_ids):
+        self.queries.append(list(run_ids))
         runs, missing = [], []
-        for run_id in run_ids:
-            status, payload = self.lookup(run_id)
-            if status == 200:
-                runs.append(payload)
-            elif status == 404:
+        for run_id in reversed(run_ids):
+            run = self.states.get(run_id)
+            if run is None:
                 missing.append(run_id)
-        return 200, {'runs': runs, 'missing_run_ids': missing}
+            else:
+                runs.append(run)
+        return 200, run_query_payload(*runs, missing=missing)
 
     def status(self):
         return self.summary

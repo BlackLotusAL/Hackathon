@@ -1,107 +1,30 @@
 """Protect persistence and concurrency contracts across the Contest feature boundaries."""
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from contextlib import closing
-import json
 import sqlite3
-from threading import Barrier
+from threading import Barrier, Event
+from unittest.mock import patch
 
-from .helpers import ArenaStub, HttpClient, TEAMS, WorkspaceFixture, case, contest_handler
+from .helpers import ArenaStub, TEAMS, WorkspaceFixture, case, run_query_payload
 
 from service.application import Contest, ContestWorker
+from service.database import DatabaseStopping
 from service.domain import ContestError
 
 
-LEGACY_SCHEMA = '''
-CREATE TABLE duels (
-    id INTEGER PRIMARY KEY, duel_id TEXT UNIQUE NOT NULL, submission TEXT NOT NULL,
-    kind TEXT NOT NULL, commits TEXT, started_at TEXT, issue TEXT, result TEXT,
-    confirmed_order INTEGER UNIQUE, delivery TEXT
-);
-CREATE TABLE games (
-    id INTEGER PRIMARY KEY AUTOINCREMENT, duel INTEGER NOT NULL REFERENCES duels(id),
-    ordinal INTEGER NOT NULL, bots TEXT NOT NULL, map TEXT NOT NULL, UNIQUE (duel, ordinal)
-);
-CREATE TABLE runs (
-    run_id TEXT PRIMARY KEY, game INTEGER NOT NULL REFERENCES games(id), attempt INTEGER NOT NULL,
-    submission TEXT NOT NULL DEFAULT 'pending', callback TEXT,
-    review TEXT, issue TEXT, manifest TEXT, UNIQUE (game, attempt)
-);
-'''
-
 
 class ServiceWorkflowTests(WorkspaceFixture):
-    @case('L2-003', '历史数据库保留原编号和 Arena 恢复能力，旧结算可查询')
-    def test_preexisting_database_recovers_without_rewriting_legacy_plans(self):
-        path = self.root / 'legacy.sqlite'
-        sides = ['t001', 'bot:L2']
-        submission = {'duel_id': 'duel-old-run', 'rules': 'prelim', 'sides': sides, 'map_seed': 42}
-        result = {'outcome': 'win', 'winner': 't001', 'runs': ['run-2.1', 'run-3.1'],
-                  'games_won': {'t001': 2, 'bot:L2': 0}, 'games_lost': {'t001': 0, 'bot:L2': 2},
-                  'started_at': '2026-11-19T10:00:00+08:00', 'ended_at': '2026-11-19T10:05:00+08:00'}
+    @case('L2-003', '拒绝不受支持的数据库结构并保留原文件')
+    def test_unsupported_database_is_left_intact(self):
+        path = self.root / 'other-schema.sqlite'
         with closing(sqlite3.connect(path)) as connection, connection:
-            connection.executescript(LEGACY_SCHEMA)
-            connection.execute('INSERT INTO duels (id, duel_id, submission, kind) VALUES (1, ?, ?, ?)',
-                               ('duel-old-run', json.dumps(submission), 'prelim-ladder'))
-            connection.execute('''INSERT INTO duels (id, duel_id, submission, kind, result, confirmed_order, delivery)
-                                  VALUES (2, ?, ?, ?, ?, 1, 'sending')''',
-                               ('duel-old-delivery', json.dumps(dict(submission, duel_id='duel-old-delivery')),
-                                'prelim-ladder', json.dumps(result)))
-            connection.execute('INSERT INTO games (id, duel, ordinal, bots, map) VALUES (1, 1, 1, ?, ?)',
-                               (json.dumps(sides), json.dumps({'seed': 42})))
-            connection.execute("INSERT INTO runs (run_id, game, attempt, submission) VALUES ('run-1.1', 1, 1, 'sending')")
-            for ordinal, run_id in enumerate(result['runs'], 1):
-                seats = sides if ordinal == 1 else sides[::-1]
-                game = connection.execute('INSERT INTO games (duel, ordinal, bots, map) VALUES (2, ?, ?, ?)',
-                                          (ordinal, json.dumps(seats), json.dumps({'seed': 42}))).lastrowid
-                manifest = {'bots': [{'team_id': team} for team in seats],
-                            'result': {'winner': seats.index('t001'), 'score': [8, 3] if ordinal == 1 else [3, 8]}}
-                connection.execute('''INSERT INTO runs (run_id, game, attempt, submission, review, manifest)
-                                      VALUES (?, ?, 1, 'accepted', 'effective', ?)''',
-                                   (run_id, game, json.dumps(manifest)))
-            connection.execute('INSERT INTO duels (id, duel_id, submission, kind) VALUES (3, ?, ?, ?)',
-                               ('duel-old-review', json.dumps(dict(submission, duel_id='duel-old-review')), 'prelim-ladder'))
-            connection.execute('INSERT INTO games (id, duel, ordinal, bots, map) VALUES (4, 3, 1, ?, ?)',
-                               (json.dumps(sides), json.dumps({'seed': 42})))
-            connection.execute('''INSERT INTO runs (run_id, game, attempt, submission, callback)
-                                  VALUES ('run-4.1', 4, 1, 'accepted', ?)''',
-                               (json.dumps({'state': 'platform_error', 'reason': 'wall_timeout'}),))
+            connection.execute('CREATE TABLE runs (run_id TEXT PRIMARY KEY)')
+            connection.execute("INSERT INTO runs VALUES ('run-1.1')")
+        original = path.read_bytes()
 
-        contest = Contest(path)
-        contest.runs.recover_submissions()
-        worker = ContestWorker(contest, self.root, ArenaStub())
-        self.assertTrue(worker.review_next())
-        legacy_run = contest.duels.show('duel-old-review')['attempts'][0]
-        self.assertEqual((legacy_run['review'], legacy_run['issue']), ('void', 'wall_timeout'))
-        self.assertIsNone(contest.runs.next_review())
-        self.assertEqual(contest.duels.show('duel-old-run')['attempts'][0]['submission'], 'unconfirmed')
-        client = HttpClient(contest_handler(contest))
-        query = '/contest/v1/duels/duel-old-delivery'
-        self.assertEqual(client.json(query + '/status')['state'], 'finished')
-        games = [{'ordinal': ordinal, 'run_id': run_id, 'winner': 't001', 'score': {'t001': 8, 'bot:L2': 3}}
-                 for ordinal, run_id in enumerate(result['runs'], 1)]
-        self.assertEqual(client.json(query + '/result'),
-                         {'duel_id': 'duel-old-delivery', 'side_results': {'t001': 'win', 'bot:L2': 'loss'},
-                          'result': dict(result, games=games, previous_duel_ids=[])})
-        contest.runs.resend('run-1.1')
-        self.assertEqual(contest.runs.claim(), {'run_id': 'run-1.1', 'duel_id': 'duel-old-run', 'rules': 'prelim',
-                                               'bots': sides, 'config': {'map': {'seed': 42}}})
-        contest.duels.accept(dict(submission, duel_id='duel-new', sides=['team001', 'bot002']))
-        run = contest.runs.claim()
-        self.assertEqual(run['duel_id'], 'duel-new')
-        contest.runs.complete_submission(run['run_id'], 202)
-        poll = contest.runs.claim_poll()
-        self.assertEqual(poll.run_id, run['run_id'])
-        contest.runs.complete_poll(poll, 200, {'run_id': run['run_id'], 'state': 'build_failed'})
-        contest.runs.complete_review(run['run_id'], 'build_failed', manifest={
-            'duel_started_at': '2026-11-20T10:00:00+08:00',
-            'bots': [{'team_id': 'team001', 'state': 'succeeded'}, {'team_id': 'bot002', 'state': 'failed'}],
-        })
-        current = client.json('/contest/v1/duels/duel-new/result')['result']
-        self.assertEqual(current['previous_duel_ids'], ['duel-old-delivery'])
-        with closing(sqlite3.connect(path)) as connection:
-            self.assertEqual(connection.execute('SELECT submission FROM duels WHERE id = 1').fetchone()[0],
-                             json.dumps(submission))
-            self.assertEqual(connection.execute('SELECT delivery FROM duels WHERE id = 2').fetchone()[0], 'sending')
+        with self.assertRaisesRegex(ValueError, '数据库结构版本不受支持'):
+            Contest(path)
+        self.assertEqual(path.read_bytes(), original)
 
     @case('L0-012', '计划创建失败时对决、预定局和尝试整体回滚')
     def test_partial_plan_failure_rolls_back_duels_games_and_attempts(self):
@@ -161,28 +84,77 @@ class ServiceWorkflowTests(WorkspaceFixture):
         poll = contest.runs.claim_poll(now=100)
         self.assertEqual(poll.run_id, run_id)
         self.assertIsNone(contest.runs.claim_poll(now=100))
-        contest.runs.complete_poll(poll, 404, None, now=100)
+        contest.runs.complete_polls((poll,), 200, run_query_payload(missing=[run_id]), now=100)
         self.assertIsNone(contest.runs.claim_poll(now=100.5))
         self.assertEqual(contest.duels.show(duel_id)['attempts'][0]['submission'], 'unconfirmed')
         self.assertIsNone(contest.runs.claim())
 
         poll = contest.runs.claim_poll(now=101)
-        contest.runs.complete_poll(poll, 200, {'run_id': run_id, 'state': 'queued'}, now=101)
+        contest.runs.complete_polls((poll,), 200, run_query_payload({'run_id': run_id, 'state': 'queued'}), now=101)
         self.assertEqual(contest.duels.show(duel_id)['attempts'][0]['submission'], 'accepted')
-        poll = contest.runs.claim_poll(now=102)
-        contest.runs.complete_poll(poll, 404, None, now=102)
+        self.assertIsNone(contest.runs.claim_poll(now=101.49))
+        poll = contest.runs.claim_poll(now=101.5)
+        contest.runs.complete_polls((poll,), 404, None, now=101.5)
+        attempt = contest.duels.show(duel_id)['attempts'][0]
+        self.assertEqual(attempt['issue'], 'Arena 执行查询失败（HTTP 404）')
+        self.assertIsNone(attempt['arena_result'])
+
+        self.assertIsNone(contest.runs.claim_poll(now=102))
+        poll = contest.runs.claim_poll(now=103)
+        contest.runs.complete_polls((poll,), 200, run_query_payload(missing=[run_id]), now=103)
         missing = contest.duels.show(duel_id)['attempts'][0]
         self.assertIn('未找到已受理', missing['issue'])
         self.assertIsNone(missing['arena_result'])
 
-        poll = contest.runs.claim_poll(now=103)
-        contest.runs.complete_poll(poll, 503, None, now=103)
         self.assertIsNone(contest.runs.claim_poll(now=104))
-        contest = Contest(path)
         poll = contest.runs.claim_poll(now=105)
-        contest.runs.complete_poll(poll, 200, {'run_id': run_id, 'state': 'finished'}, now=105)
+        contest.runs.complete_polls((poll,), 503, None, now=105)
+        self.assertIsNone(contest.runs.claim_poll(now=108))
+        contest = Contest(path)
+        poll = contest.runs.claim_poll(now=109)
+        contest.runs.complete_polls((poll,), 200, run_query_payload({'run_id': run_id, 'state': 'finished'}), now=109)
         first = contest.duels.show(duel_id)['attempts'][0]
         self.assertEqual((first['submission'], first['arena_result'], first['issue']),
                          ('accepted', {'state': 'finished'}, None))
         self.assertIsNone(contest.runs.claim())
         self.assertEqual(Contest(path).runs.next_review()[0], request)
+
+    @case('L1-008', 'SQLite 写锁释放后保留已收到的 Arena 响应，服务停止时退出锁等待')
+    def test_write_lock_wait_preserves_a_submission_response(self):
+        db = self.root / 'contended.sqlite'
+        shutdown = Event()
+        executing, deliver_response = Event(), Event()
+        arena = ArenaStub()
+        original_submit = arena.submit
+
+        def submit(request):
+            status = original_submit(request)
+            executing.set()
+            if not deliver_response.wait(5):
+                raise TimeoutError('Arena fixture did not receive permission to reply')
+            return status
+
+        with patch('service.database.SQLITE_BUSY_TIMEOUT', 0.05), patch.object(arena, 'submit', submit):
+            contest = Contest(db, shutdown=shutdown)
+            worker = ContestWorker(contest, self.root, arena)
+            contest.duels.accept({'duel_id': 'duel-lock', 'rules': 'prelim', 'sides': TEAMS, 'map_seed': 42})
+            with ThreadPoolExecutor(1) as executor, closing(sqlite3.connect(db)) as blocker:
+                response = executor.submit(worker.submit_next)
+                try:
+                    self.assertTrue(executing.wait(5))
+                    blocker.execute('BEGIN IMMEDIATE')
+                    deliver_response.set()
+                    with self.assertRaises(TimeoutError):
+                        response.result(timeout=0.25)
+                    self.assertEqual(contest.duels.show('duel-lock')['attempts'][0]['submission'], 'sending')
+                finally:
+                    deliver_response.set()
+                    blocker.rollback()
+                self.assertTrue(response.result(timeout=5))
+                self.assertEqual(len(arena.submitted), 1)
+                self.assertEqual(contest.duels.show('duel-lock')['attempts'][0]['submission'], 'accepted')
+                blocker.execute('BEGIN IMMEDIATE')
+                waiting = executor.submit(contest.runs.claim)
+                shutdown.set()
+                with self.assertRaises(DatabaseStopping):
+                    waiting.result(timeout=5)

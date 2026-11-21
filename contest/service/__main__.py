@@ -1,5 +1,6 @@
 """Serve the Contest REST contract or inspect and recover persisted executions."""
 import argparse
+from getpass import getuser
 from pathlib import Path
 
 from engine.protocol import dumps
@@ -27,6 +28,12 @@ def main(argv=None):
     void = commands.add_parser('void', help='记录组织方确认的平台故障并作废')
     void.add_argument('run_id')
     void.add_argument('reason')
+    commands.add_parser('rulings', help='列出待主办方裁定的局和场次')
+    rule = commands.add_parser('rule', help='为待裁定的局或场次录入胜方')
+    rule.add_argument('scope', choices=('game', 'duel'))
+    rule.add_argument('target', help='单局执行编号或整场对决编号')
+    rule.add_argument('winner', help='裁定胜方的参赛方编号')
+    rule.add_argument('reason')
     args = parser.parse_args(argv)
     try:
         settings = Settings.load(args.config)
@@ -50,6 +57,10 @@ def main(argv=None):
                 contest.runs.resend(args.run_id)
             elif args.action == 'void':
                 contest.runs.invalidate(args.run_id, args.reason)
+            elif args.action == 'rulings':
+                print(dumps(contest.rulings.pending()))
+            elif args.action == 'rule':
+                print(dumps(contest.rulings.record(args.scope, args.target, args.winner, args.reason, operator=getuser())))
     except KeyboardInterrupt:
         pass
     except (OSError, ValueError, KeyError, TypeError) as error:

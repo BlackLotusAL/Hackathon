@@ -20,7 +20,12 @@ ROSTER_HEADERS = ('队伍编号', '队名')
 RANK_HEADERS = ('名次', '队伍编号', '胜局数', '负局数')
 DUEL_HEADERS = ('duel_id', '队伍1编号', '队伍2编号', '队伍1胜局数', '队伍1负局数',
                 '队伍2胜局数', '队伍2负局数', '整场结果', '胜方', '判定原因', 'build_run_id')
-GAME_HEADERS = ('duel_id', '预定局序', 'run_id')
+GAME_HEADERS = ('duel_id', '预定局序', 'run_id', '胜方', '裁定理由')
+_INVALID_CELL_TEXT = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\ud800-\udfff\ufffe\uffff]')
+
+
+def fits_text_cell(value):
+    return _INVALID_CELL_TEXT.search(value) is None and len(value.encode('utf-16-le')) <= 2 * 32767
 
 
 class WorkbookError(ValueError):
@@ -167,8 +172,8 @@ def read_roster(data):
             book = _Workbook(package)
             rows = book.rows('队伍')
             columns = _header(rows, '队伍', book.shared)
-            ids = [col for col, title in columns.items() if title in ('队伍编号', 'team_id')]
-            names = [col for col, title in columns.items() if title in ('队名', '队伍名称', 'team_name')]
+            ids = [col for col, title in columns.items() if title == ROSTER_HEADERS[0]]
+            names = [col for col, title in columns.items() if title == ROSTER_HEADERS[1]]
             if len(ids) != 1 or len(names) > 1:
                 raise WorkbookError('「队伍」表须有一列队伍编号，可选一列队名')
             roster = []
@@ -198,7 +203,7 @@ def _worksheet(package, path, headers, rows, count):
     view = ET.SubElement(views, 'sheetView', workbookViewId='0')
     ET.SubElement(view, 'pane', ySplit='1', topLeftCell='A2', activePane='bottomLeft', state='frozen')
     cols = ET.SubElement(root, 'cols')
-    widths = {'duel_id': 47, 'build_run_id': 22, 'run_id': 20, '判定原因': 21, '队名': 35}
+    widths = {'duel_id': 47, 'build_run_id': 22, 'run_id': 20, '判定原因': 27, '裁定理由': 27, '队名': 35}
     for index, header in enumerate(headers, 1):
         width = widths.get(header, max(13, 2 * len(header) + 3))
         ET.SubElement(cols, 'col', min=str(index), max=str(index), width=str(width), customWidth='1')

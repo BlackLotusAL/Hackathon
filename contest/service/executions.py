@@ -4,12 +4,13 @@ import json
 from time import time
 from typing import NamedTuple
 
+from engine.core import ENGINE_VERSION
 from engine.mapgen import load_map
 from engine.protocol import json_object
-from engine.replay import LEGACY_ENGINE_VERSION, VerificationError, check_fields, game_result, verify_replay
+from engine.replay import VerificationError, check_fields, game_result, verify_replay
 
-from .arena import ACTIVE_ARENA_STATES, batch_lookups, run_observation
-from .domain import BASELINES, RUN_ID, ZONE, ContestError, canonical_id, encode
+from .arena import ACTIVE_ARENA_STATES, run_observation, run_query_results
+from .domain import BASELINES, GAME_TIE_ISSUE, RUN_ID, ZONE, ContestError, encode
 from .duels import insert_attempt, settle_duel
 
 
@@ -18,7 +19,7 @@ POLL_LEASE = 15
 
 _OPEN_RUNS = '''
     FROM current_runs r JOIN games g ON g.id = r.game JOIN duels d ON d.id = g.duel
-    WHERE d.result IS NULL
+    WHERE d.closed_at IS NULL
 '''
 _POLLABLE_RUNS = _OPEN_RUNS + '''
     AND r.submission IN ('accepted', 'unconfirmed') AND r.arena_result IS NULL AND r.review IS NULL
@@ -37,9 +38,10 @@ def _reserve_polls(connection, rows, now):
     return claims
 
 
-def _poll_values(run, lookup, now, preliminary, query_error):
-    status, payload = lookup
-    observed = run_observation(run['run_id'], payload) if status == 200 else None
+def _poll_values(run, status, results, now):
+    run_id = run['run_id']
+    payload = results[run_id] if results is not None else None
+    observed = run_observation(run_id, payload)
     result = None
     if observed is not None:
         submission, failures, issue = 'accepted', 0, None
@@ -48,21 +50,20 @@ def _poll_values(run, lookup, now, preliminary, query_error):
     else:
         submission, issue = run['submission'], run['issue']
         failures = min(run['poll_failures'] + 1, 6)
-        if query_error is not None:
-            issue = query_error
-        elif status == 404 and submission == 'accepted':
+        missing = results is not None and payload is None
+        if missing and submission == 'accepted':
             issue = 'Arena 未找到已受理的执行，请核对执行记录'
-        elif status == 200:
+        elif status == 200 and not missing:
             issue = 'Arena 返回的执行编号、状态或故障原因无效'
-        elif status is not None and 400 <= status < 500 and status not in (404, 408, 429):
+        elif status is not None and 400 <= status < 500 and status not in (408, 429):
             issue = f'Arena 执行查询失败（HTTP {status}）'
 
-    if preliminary:
+    if run['kind'] == 'prelim':
         poll_after, failures = 0, 0
     else:
         delay = min(30, 2 ** (failures - 1)) if failures else POLL_INTERVAL
         poll_after = now + delay
-    return submission, result, poll_after, failures, issue, run['run_id']
+    return submission, result, poll_after, failures, issue, run_id
 
 
 def _request(row):
@@ -73,20 +74,18 @@ def _request(row):
 
 def _open_attempt(connection, run_id):
     run = connection.execute(
-        f'SELECT r.*, g.duel {_OPEN_RUNS} AND r.run_id = ?', (run_id,),
+        f'SELECT r.*, g.duel, d.batch_id {_OPEN_RUNS} AND r.run_id = ?', (run_id,),
     ).fetchone()
     if run is None:
-        raise ContestError(409, 'ATTEMPT_CLOSED', '该执行已被替代或整场已结算')
+        raise ContestError(409, 'ATTEMPT_CLOSED', '该执行已被替代或对决已关闭')
     return run
 
 
-def retry_attempt(connection, run_id, *, preliminary=False):
+def retry_attempt(connection, run_id, *, batch_id=None):
     """Create a replacement inside the caller's transaction."""
     run = _open_attempt(connection, run_id)
-    if preliminary and connection.execute(
-            'SELECT 1 FROM prelim_duels WHERE duel = ?', (run['duel'],),
-    ).fetchone() is None:
-        raise ContestError(404, 'PRELIM_RUN_NOT_FOUND', '执行不属于本次初赛')
+    if batch_id is not None and run['batch_id'] != batch_id:
+        raise ContestError(404, 'BATCH_RUN_NOT_FOUND', '执行不属于当前批次')
     if run['review'] != 'void':
         raise ContestError(409, 'NOT_VOID', '该执行尚未作废')
     return insert_attempt(connection, run['game'], run['attempt'] + 1)
@@ -100,7 +99,8 @@ class ExecutionService:
         with self.database.transaction() as connection:
             active = connection.execute(f'''
                 SELECT d.id, d.kind {_OPEN_RUNS}
-                AND r.submission != 'pending' AND r.review IS NULL ORDER BY d.id LIMIT 1
+                AND r.submission IN ('sending', 'accepted', 'unconfirmed', 'resend') AND r.review IS NULL
+                ORDER BY d.id LIMIT 1
             ''').fetchone()
             kind = active['kind'] if active else None
             final_duel = active['id'] if kind == 'final' else None
@@ -127,14 +127,19 @@ class ExecutionService:
         else:
             submission = 'unconfirmed'
         with self.database.transaction() as connection:
-            connection.execute('''
+            connection.execute(f'''
                 UPDATE runs SET submission = ?, issue = ?, poll_after = 0, poll_failures = 0
-                WHERE run_id = ? AND submission = 'sending' AND review IS NULL
+                WHERE run_id IN (
+                    SELECT r.run_id {_OPEN_RUNS} AND r.run_id = ? AND r.submission = 'sending' AND r.review IS NULL
+                )
             ''', (submission, issue, run_id))
 
     def recover_submissions(self):
         with self.database.transaction() as connection:
-            connection.execute("UPDATE runs SET submission = 'unconfirmed' WHERE submission = 'sending'")
+            connection.execute(f'''
+                UPDATE runs SET submission = 'unconfirmed'
+                WHERE run_id IN (SELECT r.run_id {_OPEN_RUNS} AND r.submission = 'sending' AND r.review IS NULL)
+            ''')
 
     def claim_poll(self, *, now=None):
         now = time() if now is None else now
@@ -167,28 +172,18 @@ class ExecutionService:
             ''', (now, *run_ids)).fetchall()
             return _reserve_polls(connection, rows, now)
 
-    def complete_poll(self, claim, status, payload, *, now=None):
-        self._complete_polls((claim,), {claim.run_id: (status, payload)}, now=now)
-
-    def complete_preliminary_polls(self, claims, status, payload, *, now=None):
-        lookups = batch_lookups((claim.run_id for claim in claims), payload) if status == 200 else {}
-        default = (200, None) if status == 200 else (None, None)
-        query_error = None
-        if status is not None and 400 <= status < 500 and status not in (408, 429):
-            query_error = f'Arena 批量查询失败（HTTP {status}）'
-        self._complete_polls(claims, lookups, now=now, preliminary=True, default=default, query_error=query_error)
-
-    def _complete_polls(self, claims, lookups, *, now, preliminary=False, default=(None, None), query_error=None):
+    def complete_polls(self, claims, status, payload, *, now=None):
         now = time() if now is None else now
         expires = {claim.run_id: claim.expires_at for claim in claims}
+        results = run_query_results(expires, payload) if status == 200 else None
         placeholders = ', '.join('?' for _ in expires)
         with self.database.transaction() as connection:
             rows = connection.execute(f'''
-                SELECT r.run_id, r.submission, r.poll_after, r.poll_failures, r.issue {_POLLABLE_RUNS}
+                SELECT r.run_id, r.submission, r.poll_after, r.poll_failures, r.issue, d.kind {_POLLABLE_RUNS}
                 AND r.run_id IN ({placeholders})
             ''', tuple(expires)).fetchall()
             # Apply responses only to attempts still reserved by this query.
-            updates = (_poll_values(run, lookups.get(run['run_id'], default), now, preliminary, query_error)
+            updates = (_poll_values(run, status, results, now)
                        for run in rows if run['poll_after'] == expires[run['run_id']])
             connection.executemany('''
                 UPDATE runs SET submission = ?, arena_result = ?, poll_after = ?, poll_failures = ?, issue = ?
@@ -213,6 +208,8 @@ class ExecutionService:
             if duel is None:
                 return
             if manifest is not None:
+                if review == 'effective' and manifest['result']['winner'] is None:
+                    review, issue = 'awaiting_ruling', GAME_TIE_ISSUE
                 commits = encode({bot['team_id']: bot['commit'] for bot in manifest['bots'] if 'commit' in bot})
                 started = manifest.get('duel_started_at') if duel['kind'].endswith('-ladder') else None
                 if duel['commits'] is None:
@@ -240,7 +237,7 @@ class ExecutionService:
             if run['submission'] == 'pending':
                 raise ContestError(409, 'RUN_NOT_SUBMITTED', '该执行尚未提交')
             connection.execute("UPDATE runs SET review = 'void', issue = ? WHERE run_id = ?", (reason, run_id))
-            connection.execute('UPDATE duels SET issue = NULL WHERE id = ?', (run['duel'],))
+            connection.execute('UPDATE duels SET awaiting_ruling = 0 WHERE id = ?', (run['duel'],))
 
     def retry(self, run_id):
         with self.database.transaction() as connection:
@@ -273,7 +270,7 @@ def review_archive(root, request, state, *, ladder):
             raise VerificationError('归档队伍与预定出生点不一致')
         for bot in bots:
             commit = bot.get('commit')
-            if canonical_id(bot['team_id']) not in BASELINES or 'commit' in bot:
+            if bot['team_id'] not in BASELINES or 'commit' in bot:
                 if not isinstance(commit, str) or not commit:
                     raise VerificationError('归档缺少有效提交号')
         if ladder:
@@ -286,25 +283,25 @@ def review_archive(root, request, state, *, ladder):
             if 'result' in manifest or 'failed' not in statuses or any(
                     mark not in ('succeeded', 'failed') for mark in statuses):
                 raise VerificationError('归档缺少双方已确认的构建失败结论')
-            return manifest, None
+            return manifest
 
         if state != 'finished' or any('state' in bot for bot in bots):
             raise VerificationError('归档与执行状态不符')
         result = manifest['result']
         version = result['engine_version']
+        if version != ENGINE_VERSION:
+            raise VerificationError(f'无可用的同版引擎 {version}')
         board, digest = load_map(request['config']['map'], request['rules'])
         check_fields(result, {'map': board['id'], 'map_sha256': digest}, 'match.json')
         replay = json_object((path / 'replay.json').read_bytes())
         with (path / 'log.jsonl').open('rb') as stream:
             log = [json_object(line) for line in stream]
-        game = verify_replay(replay, engine_version=version, board=board, log=log,
-                             require_public=not ladder and version != LEGACY_ENGINE_VERSION)
+        game = verify_replay(replay, board=board, log=log)
         recomputed = game_result(game)
         if 'turns' not in result:
             recomputed.pop('turns')
         check_fields(result, recomputed, 'match.json')
-        pending = game.winner is None or getattr(game, 'decided_by_seat', False)
-        return manifest, '单局四项指标全同，待主办方处理' if pending else None
+        return manifest
     except VerificationError:
         raise
     except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError, RuntimeError) as error:

@@ -5,10 +5,12 @@ from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 from .helpers import (ArenaStub, Bot, HttpClient, MatchFixture, admin_headers, arena_archive, case,
-                      contest_handler, exported_tables, http_arena, roster_workbook, running_service,
+                      contest_handler, exported_tables, http_arena, roster_workbook, run_query_payload, running_service,
                       sealed_maps, wait_for, write_config, write_map_pools)
 
 from service.application import Contest, ContestWorker
+from service.arena import ArenaClient
+from service.domain import ContestError
 from service.server import Admin
 from service.workbook import DOC_REL, PKG_REL, SHEET_XML, TYPES
 
@@ -24,9 +26,11 @@ class PrelimFixture(MatchFixture):
         self.contest = Contest(self.db, {'prelim': sealed_maps('prelim')})
         self.arena = ArenaStub()
         self.worker = ContestWorker(self.contest, self.root, self.arena)
-        admin = Admin(self.contest.preliminary, 'organizer', 'test-password', self.arena)
+        admin = Admin(self.contest, 'organizer', 'test-password', self.arena)
         handler = contest_handler(self.contest, admin=admin)
-        self.admin = HttpClient(handler, prefix=BASE, headers=admin_headers('organizer', 'test-password'))
+        headers = admin_headers('organizer', 'test-password')
+        self.admin = HttpClient(handler, prefix=BASE, headers=headers)
+        self.manager = HttpClient(handler, prefix='/admin', headers=headers)
         self.client = HttpClient(handler)
 
     def next_run(self):
@@ -38,7 +42,7 @@ class PrelimFixture(MatchFixture):
     def poll_result(self, run_id, state, **fields):
         self.arena.set_state(run_id, state, **fields)
         self.worker.poll_preliminary_round()
-        self.assertIn(run_id, self.arena.batches[-1])
+        self.assertIn(run_id, self.arena.queries[-1])
 
     def build_both_failed(self, request):
         output = self.root / 'runs' / request['run_id']
@@ -49,7 +53,162 @@ class PrelimFixture(MatchFixture):
 
 
 class PrelimAdminTests(PrelimFixture):
-    @case('L0-025', '初赛每轮只查询当前待查尝试，每批最多 100 局')
+    @case('L0-026', '后台裁定复核通过的未决胜单局和整场，正式初赛可确认导出')
+    def test_rulings_complete_the_official_batch_without_changing_evidence(self):
+        self.admin.json('roster', roster_workbook(ROSTER[:2]), method='POST')
+        self.admin.json('plan', method='POST')
+        games = []
+        for ordinal in range(1, 7):
+            request = self.next_run()
+            output, _, _ = self.judge_archive(request)
+            evidence = [(output / name).read_bytes() for name in ('match.json', 'replay.json')]
+            run_id = request['run_id']
+            self.poll_result(run_id, 'finished')
+            self.assertTrue(self.worker.review_next())
+            self.assertFalse(self.worker.submit_next())
+            pending, = self.manager.json('rulings')['pending']
+            self.assertEqual((pending['scope'], pending['run_id'], pending['ordinal'], pending['batch_id']),
+                             ('game', run_id, ordinal, 'official'))
+            winner = request['bots'][0]
+            decision = {'scope': 'game', 'target': run_id, 'winner': winner, 'reason': '按公示规则核定单局胜方'}
+            if ordinal == 1:
+                self.assertEqual(self.manager.post('rulings', decision, headers={'X-Contest-Admin': ''})[0], 403)
+                self.assertEqual(self.manager.json('rulings', dict(decision, winner='team099'),
+                                                   method='POST', status=400)['code'], 'INVALID_RULING_WINNER')
+                self.assertEqual(self.manager.json('rulings', dict(decision, reason='无效\u0001文本'),
+                                                   method='POST', status=400)['code'], 'INVALID_RULING')
+            accepted = self.manager.json('rulings', decision, method='POST')
+            self.assertEqual(accepted['operator'], 'organizer')
+            self.assertEqual(self.manager.json('rulings', decision, method='POST'), accepted)
+            self.assertEqual(self.manager.json('rulings', dict(decision, reason='其他理由'),
+                                               method='POST', status=409)['code'], 'RULING_CONFLICT')
+            self.assertEqual([(output / name).read_bytes() for name in ('match.json', 'replay.json')], evidence)
+            games.append((run_id, winner))
+
+        duel_id = request['duel_id']
+        pending, = self.manager.json('rulings')['pending']
+        self.assertEqual((pending['scope'], pending['duel_id']), ('duel', duel_id))
+        self.assertEqual(self.admin.json('confirm', method='POST', status=409)['code'], 'PRELIM_INCOMPLETE')
+        reason = '按公示规则核定整场胜方'
+        self.manager.json('rulings', {'scope': 'duel', 'target': duel_id, 'winner': ROSTER[0][0], 'reason': reason},
+                          method='POST')
+        self.assertEqual(self.manager.json('rulings')['pending'], [])
+        result = self.client.json(f'/contest/v1/duels/{duel_id}/result')['result']
+        self.assertEqual((result['winner'], result['reason']), (ROSTER[0][0], reason))
+        self.assertEqual([(game['run_id'], game['winner']) for game in result['games']], games)
+        self.assertTrue(all(game['reason'] == '按公示规则核定单局胜方' for game in result['games']))
+        self.assertEqual(result['games_won'], dict.fromkeys((team for team, _ in ROSTER[:2]), 3))
+        self.assertEqual(self.admin.json('confirm', method='POST')['state'], 'confirmed')
+        code, workbook = self.admin.request('results.xlsx')
+        self.assertEqual(code, 200)
+        tables = exported_tables(workbook)
+        self.assertIn(f'人工裁定（{reason}）', tables['对决'][1])
+        self.assertEqual(tables['对局'][1:], [
+            [duel_id, ordinal, run_id, winner, '按公示规则核定单局胜方']
+            for ordinal, (run_id, winner) in enumerate(games, 1)
+        ])
+
+    @case('L0-027', '独立压测按真实单循环编排、查询、重跑并与正式排名和导出隔离')
+    def test_load_test_batches_share_arena_and_isolate_all_official_results(self):
+        first, second = 'load-tests/load-first', 'load-tests/load-second'
+        workbook = roster_workbook(ROSTER)
+        self.assertEqual(self.client.post(f'/admin/{first}', workbook)[0], 401)
+        self.assertEqual(self.manager.post('load-tests/official', workbook)[0], 400)
+        self.assertEqual(self.manager.post(first, roster_workbook(ROSTER[:1]))[0], 400)
+        created = self.manager.json(first, workbook, method='POST')
+        self.assertEqual((created['state'], created['duels']['total'], created['games']['total']), ('running', 3, 18))
+        self.assertEqual(self.manager.json(first, workbook, method='POST')['duels'], created['duels'])
+        self.assertEqual(self.manager.json(first, roster_workbook(ROSTER[:2]), method='POST', status=409)['code'],
+                         'LOAD_TEST_CONFLICT')
+        self.assertEqual(self.admin.json('progress')['state'], 'empty')
+        self.manager.json(second, roster_workbook(ROSTER[:2]), method='POST')
+        self.assertCountEqual([item['batch_id'] for item in self.manager.json('load-tests')['batches']],
+                              ['load-first', 'load-second'])
+        self.contest = Contest(self.db, {'prelim': sealed_maps('prelim')})
+        self.worker = ContestWorker(self.contest, self.root, self.arena)
+        requests = [self.next_run() for _ in range(4)]
+        self.assertEqual(len({request['run_id'] for request in requests}), 4)
+        self.assertTrue(all(request['rules'] == 'prelim' and 'file' in request['config']['map']
+                            for request in requests))
+        retried = requests[0]
+        self.poll_result(retried['run_id'], 'platform_error', reason='wall_timeout')
+        self.assertTrue(self.worker.review_next())
+        self.assertEqual(self.admin.post('retry', {'run_id': retried['run_id']})[0], 404)
+        self.assertEqual(self.manager.post(second + '/retry', {'run_id': retried['run_id']})[0], 404)
+        retry = self.manager.json(first + '/retry', {'run_id': retried['run_id']}, method='POST')
+        replayed = self.next_run()
+        self.assertEqual(replayed, dict(retried, run_id=retry['retry_run_id']))
+        for request in [replayed, *requests[1:]]:
+            self.build_both_failed(request)
+            for resource in ('status', 'result'):
+                self.assertEqual(self.client.request(f"/contest/v1/duels/{request['duel_id']}/{resource}")[0], 404)
+        completed = self.manager.json(first)
+        self.assertEqual((completed['state'], completed['duels']['settled'], completed['attempts']),
+                         ('finished', 3, {'retries': 1, 'voided': 1}))
+        self.assertTrue(completed['finished_at'])
+        self.assertGreater(completed['duels_per_minute'], 0)
+        self.assertEqual(self.manager.json(first + '/stop', method='POST'), completed)
+        self.assertEqual(self.manager.json(second)['duels']['settled'], 1)
+        self.assertEqual(self.admin.json('progress')['duels']['settled'], 0)
+        self.admin.json('roster', roster_workbook(ROSTER[:2]), method='POST')
+        self.admin.json('plan', method='POST')
+        self.assertEqual(self.admin.json('standings', status=409)['code'], 'PRELIM_INCOMPLETE')
+        official = self.next_run()
+        self.build_both_failed(official)
+        self.assertEqual(self.admin.json('confirm', method='POST')['state'], 'confirmed')
+        code, workbook = self.admin.request('results.xlsx')
+        self.assertEqual(code, 200)
+        tables = exported_tables(workbook)
+        self.assertEqual(len(tables['对决']), 2)
+        self.assertEqual(tables['对决'][1][0], official['duel_id'])
+
+    @case('L0-029', '压测拒单不占执行阶段，结束批次后保留结果并关闭未结算任务')
+    def test_load_test_rejection_and_stop_leave_formal_scheduling_clear(self):
+        rejected = 'load-tests/load-rejected'
+        self.manager.json(rejected, roster_workbook(ROSTER[:2]), method='POST')
+        with patch.object(self.arena, 'submit', return_value=409) as submit:
+            self.assertTrue(self.worker.submit_next())
+        refused = submit.call_args.args[0]
+        self.assertEqual(self.manager.json(rejected)['attention'][0]['run_id'], refused['run_id'])
+        self.assertEqual(self.contest.runs.preliminary_poll_targets(), [])
+        reopened = Contest(self.db, {'final': sealed_maps('final')})
+        for rules, extra in (('prelim', {'map_seed': 42}), ('final', {})):
+            duel_id = f'duel-after-{rules}'
+            reopened.duels.accept({'duel_id': duel_id, 'rules': rules, 'sides': ['team001', 'team002'], **extra})
+            claimed = reopened.runs.claim()
+            self.assertEqual(claimed['duel_id'], duel_id)
+            reopened.runs.complete_submission(claimed['run_id'], 409)
+        self.assertEqual(self.manager.json(rejected + '/stop', method='POST')['state'], 'stopped')
+
+        batch = 'load-tests/load-with-results'
+        self.manager.json(batch, roster_workbook(ROSTER), method='POST')
+        completed = self.next_run()
+        self.build_both_failed(completed)
+        confirmed = self.contest.duels.show(completed['duel_id'])['result']
+        run_id = self.next_run()['run_id']
+        claims = self.contest.runs.claim_preliminary_polls([run_id])
+        self.assertEqual([claim.run_id for claim in claims], [run_id])
+        self.assertEqual(self.client.post(f'/admin/{batch}/stop')[0], 401)
+        self.assertEqual(self.manager.post('load-tests/load-unknown/stop')[0], 404)
+        stopped = self.manager.json(batch + '/stop', method='POST')
+        self.assertEqual(stopped['state'], 'stopped')
+        self.assertIsNone(stopped['finished_at'])
+        self.assertTrue(stopped['stopped_at'])
+        self.assertEqual(stopped['duels'], {'total': 3, 'settled': 1, 'awaiting_action': 0, 'pending': 0, 'cancelled': 2})
+        self.assertEqual(stopped['games']['cancelled'], 12)
+        self.assertEqual(stopped['attention'], [])
+        self.contest.runs.complete_polls(claims, 200, run_query_payload({'run_id': run_id, 'state': 'finished'}))
+        self.assertFalse(self.worker.review_next())
+        self.assertFalse(self.worker.submit_next())
+        self.assertEqual(self.contest.runs.preliminary_poll_targets(), [])
+        self.assertEqual(self.contest.duels.show(completed['duel_id'])['result'], confirmed)
+        self.assertEqual(self.manager.json(batch + '/stop', method='POST'), stopped)
+        self.assertEqual(reopened.preliminary.load_test_progress('load-with-results'), stopped)
+        with self.assertRaises(ContestError) as error:
+            reopened.preliminary.retry(run_id, load_test_id='load-with-results')
+        self.assertEqual(error.exception.code, 'ATTEMPT_CLOSED')
+
+    @case('L0-025', '初赛以 HTTP 批量查询当前尝试，每批最多 100 局，按编号合并结果')
     def test_preliminary_round_filters_and_batches_run_ids(self):
         roster = roster_workbook([(f'team{number:03d}', '') for number in range(1, 17)])
         self.admin.json('roster', roster, method='POST')
@@ -59,26 +218,30 @@ class PrelimAdminTests(PrelimFixture):
         runs.complete_submission(unconfirmed['run_id'], None)
         submitted = [self.next_run() for _ in range(103)]
         missing, finished, replaced, soon_finished = submitted[:4]
-        del self.arena.responses[missing['run_id']]
+        del self.arena.states[missing['run_id']]
 
         claims = runs.claim_preliminary_polls([finished['run_id']])
-        runs.complete_preliminary_polls(claims, 200, {
-            'runs': [{'run_id': finished['run_id'], 'state': 'finished'}], 'missing_run_ids': [],
-        })
+        runs.complete_polls(claims, 200, run_query_payload({'run_id': finished['run_id'], 'state': 'finished'}))
         stale = runs.claim_preliminary_polls([replaced['run_id']])
         runs.invalidate(replaced['run_id'], '测试平台故障')
         replacement_id = runs.retry(replaced['run_id'])
         self.assertEqual(self.next_run()['run_id'], replacement_id)
-        runs.complete_preliminary_polls(stale, 200, {
-            'runs': [{'run_id': replaced['run_id'], 'state': 'finished'}], 'missing_run_ids': [],
-        })
+        runs.complete_polls(stale, 200, run_query_payload({'run_id': replaced['run_id'], 'state': 'finished'}))
         sending = runs.claim()
         self.arena.set_state(soon_finished['run_id'], 'finished')
 
         self.assertFalse(self.worker.poll_next())
-        self.worker.poll_preliminary_round()
-        self.assertEqual([len(batch) for batch in self.arena.batches], [100, 3])
-        queried = [run_id for batch in self.arena.batches for run_id in batch]
+        with http_arena(None) as (url, calls, peer):
+            peer.states.update(self.arena.states)
+            ContestWorker(self.contest, self.root, ArenaClient(url)).poll_preliminary_round()
+        self.assertEqual([len(batch) for batch in peer.queries], [100, 3])
+        for batch in peer.queries:
+            request = calls.get_nowait()
+            self.assertEqual((request['method'], request['path']), ('POST', '/arena/v1/runs/query'))
+            self.assertEqual(request['headers']['content-type'], 'application/json')
+            self.assertEqual(request['body'], {'run_ids': batch})
+        self.assertTrue(calls.empty())
+        queried = [run_id for batch in peer.queries for run_id in batch]
         expected = {run['run_id'] for run in submitted} - {finished['run_id'], replaced['run_id']}
         expected.update((unconfirmed['run_id'], replacement_id))
         self.assertCountEqual(queried, expected)
@@ -91,9 +254,8 @@ class PrelimAdminTests(PrelimFixture):
         self.assertIn('未找到已受理', first_run(missing)['issue'])
         self.assertIsNone(first_run(replaced)['arena_result'])
         self.assertEqual(first_run(soon_finished)['arena_result'], {'state': 'finished'})
-        self.arena.batches.clear()
         self.worker.poll_preliminary_round()
-        self.assertCountEqual([run_id for batch in self.arena.batches for run_id in batch],
+        self.assertCountEqual([run_id for batch in self.arena.queries for run_id in batch],
                               expected - {soon_finished['run_id']})
 
     @case('L1-007', '初赛每 10 秒轮询一轮，上一轮超时时跳过该定时点')
@@ -115,7 +277,7 @@ class PrelimAdminTests(PrelimFixture):
 
         clock = Clock()
         queries = []
-        lookup = self.arena.lookup_batch
+        query = self.arena.query_runs
 
         def reply(run_ids):
             queries.append((clock.now, run_ids))
@@ -123,10 +285,10 @@ class PrelimAdminTests(PrelimFixture):
                 clock.now += 16
                 return 503, None
             clock.now += 3
-            return lookup(run_ids)
+            return query(run_ids)
 
         with patch('service.application.monotonic', side_effect=lambda: clock.now):
-            with patch.object(self.arena, 'lookup_batch', side_effect=reply):
+            with patch.object(self.arena, 'query_runs', side_effect=reply):
                 self.worker.poll_preliminary(clock)
         self.assertEqual(queries, [(0, [running, queued]), (20, [running, queued]), (30, [running, queued])])
         self.assertEqual(self.contest.runs.preliminary_poll_targets(), [running, queued])
@@ -162,9 +324,9 @@ class PrelimAdminTests(PrelimFixture):
         self.assertEqual(data['attempts'], {'retries': 0, 'voided': 1})
 
         retry_id = self.contest.runs.retry(original['run_id'])
-        batches_before = len(self.arena.batches)
+        queries_before = len(self.arena.queries)
         self.worker.poll_preliminary_round()
-        self.assertEqual(len(self.arena.batches), batches_before)
+        self.assertEqual(len(self.arena.queries), queries_before)
         replacement = self.next_run()
         self.assertEqual(replacement, dict(original, run_id=retry_id))
         self.assertEqual(self.admin.json('progress')['games']['awaiting_action'], 0)
@@ -184,7 +346,7 @@ class PrelimAdminTests(PrelimFixture):
             self.assertEqual([bot['commit'] for bot in manifest['bots']], [self.commits[team] for team in sides])
             self.poll_result(request['run_id'], 'finished')
             self.assertTrue(self.worker.review_next())
-            played.append(request['run_id'])
+            played.append((request['run_id'], winner))
             if index == 0:
                 data = self.admin.json('progress')
                 self.assertEqual(data['games']['effective'], 1)
@@ -213,14 +375,16 @@ class PrelimAdminTests(PrelimFixture):
         duels = {row[0]: row for row in tables['对决'][1:]}
         self.assertEqual(set(duels), {build['duel_id'], *ran})
         self.assertEqual(duels[build['duel_id']][3:], [0, 6, 0, 6, 'double_loss', None, '构建双败', build['run_id']])
-        self.assertEqual(tables['对局'][0], ['duel_id', '预定局序', 'run_id'])
-        self.assertEqual(tables['对局'][1:], [[duel_id, ordinal, run_id] for duel_id, runs in ran.items()
-                                              for ordinal, run_id in enumerate(runs, 1)])
+        self.assertEqual(tables['对局'][0], ['duel_id', '预定局序', 'run_id', '胜方', '裁定理由'])
+        self.assertEqual(tables['对局'][1:], [[duel_id, ordinal, run_id, winner, None] for duel_id, runs in ran.items()
+                                              for ordinal, (run_id, winner) in enumerate(runs, 1)])
 
-    @case('L1-004', '名单列名兼容、队伍编号和重复行校验')
+    @case('L1-004', '名单只使用约定表头，校验队伍编号和重复行')
     def test_roster_corrections_validate_team_ids(self):
         rows = [('微光', 'team001'), ('曝光', 'team002')]
-        book = roster_workbook(rows, ('team_name', 'team_id'))
+        aliases = roster_workbook(rows, ('team_name', 'team_id'))
+        self.assertEqual(self.admin.json('roster', aliases, method='POST', status=400)['code'], 'INVALID_ROSTER')
+        book = roster_workbook(rows, ('队名', '队伍编号'))
         self.admin.json('roster', book, method='POST')
         for team in ('t001', 'team01', 'team0001', 'bot001'):
             with self.subTest(team=team):
@@ -243,7 +407,7 @@ class PrelimAdminTests(PrelimFixture):
         self.assertEqual(self.admin.json('plan', method='POST'), before)
         self.assertEqual(self.admin.json('progress'), before)
 
-    @case('L1-005', 'Excel 共享字符串和稀疏单元格兼容')
+    @case('L1-005', 'Excel 共享字符串和稀疏单元格可读取')
     def test_imports_excel_shared_strings_and_sparse_cells(self):
         ns = f'{{{SHEET_XML}}}'
         output = BytesIO()
@@ -336,7 +500,7 @@ class PrelimHTTPTests(MatchFixture):
                     'duel_id': original['duel_id'], 'run_id': 'run-1.1', 'ordinal': 1,
                     'issue': 'slot_unhealthy', 'retryable': True,
                 }])
-                self.assertTrue(any(len(batch) > 1 for batch in arena.batches))
+                self.assertTrue(any(len(batch) > 1 for batch in arena.queries))
 
             with running_service(config) as address:
                 admin = HttpClient(address, prefix=BASE, headers=admin_headers())
@@ -365,16 +529,18 @@ class PrelimHTTPTests(MatchFixture):
                 self.assertEqual(len(tables['对决'][1:]), 3)
                 rows = tables['对局'][1:]
                 self.assertEqual(len(rows), 18)
-                self.assertEqual({run_id for _, _, run_id in rows},
+                self.assertEqual({row[2] for row in rows},
                                  {'run-1.2', *(f'run-{number}.1' for number in range(2, 19))})
-                self.assertEqual(rows[0], [original['duel_id'], 1, 'run-1.2'])
+                self.assertEqual(rows[0], [original['duel_id'], 1, 'run-1.2', min(original['bots']), None])
                 contest = Contest(db)
                 for duel, *_ in tables['对决'][1:]:
-                    record = contest.duels.show(duel)
-                    runs = [(ordinal, run_id) for duel_id, ordinal, run_id in rows if duel_id == duel]
-                    self.assertEqual(runs, list(enumerate(record['result']['runs'], 1)))
+                    games = contest.duels.result(duel)['result']['games']
+                    self.assertEqual([row for row in rows if row[0] == duel], [
+                        [duel, game['ordinal'], game['run_id'], game['winner'], None] for game in games
+                    ])
 
                 portal = HttpClient(address)
+                ladder_query_start = len(arena.queries)
                 duel = {'duel_id': 'duel-ladder', 'rules': 'prelim', 'sides': ['team001', 'team002'], 'map_seed': 42}
                 self.assertEqual(portal.post('/contest/v1/duels', duel), (202, b''))
                 self.assertEqual(portal.post('/contest/v1/duels', duel), (202, b''))
@@ -391,6 +557,8 @@ class PrelimHTTPTests(MatchFixture):
                 self.assertEqual(result['games_won'], {'team001': 2, 'team002': 0})
                 self.assertEqual(result['games_lost'], {'team001': 0, 'team002': 2})
                 self.assertEqual(result['runs'], ['run-19.1', 'run-20.1'])
+                self.assertEqual({tuple(batch) for batch in arena.queries[ladder_query_start:]},
+                                 {('run-19.1',), ('run-20.1',)})
                 self.assertEqual([(game['ordinal'], game['run_id'], game['winner']) for game in result['games']],
                                  [(1, 'run-19.1', 'team001'), (2, 'run-20.1', 'team001')])
                 self.assertEqual((result['started_at'], result['previous_duel_ids']), (started_at, []))

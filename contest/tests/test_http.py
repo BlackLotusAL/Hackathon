@@ -6,8 +6,8 @@ from service.application import Contest
 from service.config import Settings
 
 from .helpers import (CONTEST, TEAMS, HttpClient, WorkspaceFixture, admin_headers, arena_archive,
-                      case, contest_handler, http_arena, roster_workbook, run_module, running_service,
-                      wait_for, write_config, write_map_pools)
+                      case, contest_handler, http_arena, roster_workbook, run_module, run_query_payload,
+                      running_service, wait_for, write_config, write_map_pools)
 
 
 class HttpServiceTests(WorkspaceFixture):
@@ -39,10 +39,13 @@ class HttpServiceTests(WorkspaceFixture):
         request = contest.runs.claim()
         run_id = request['run_id']
         contest.runs.complete_submission(run_id, 202)
+        finished = {'run_id': run_id, 'state': 'finished'}
         invalid_payloads = (
-            {'run_id': run_id, 'state': 'finished', 'reason': 'unexpected'},
-            {'run_id': run_id, 'state': 'platform_error', 'reason': 'unknown'},
-            {'run_id': 'run-999.1', 'state': 'finished'},
+            run_query_payload(dict(finished, reason='unexpected')),
+            run_query_payload({'run_id': run_id, 'state': 'platform_error', 'reason': 'unknown'}),
+            run_query_payload(dict(finished, run_id='run-999.1')),
+            run_query_payload(finished, missing=[run_id]),
+            run_query_payload(),
             {},
         )
         for index, invalid in enumerate(invalid_payloads, 1):
@@ -50,16 +53,17 @@ class HttpServiceTests(WorkspaceFixture):
                 now = index * 60
                 poll = contest.runs.claim_poll(now=now)
                 self.assertEqual(poll.run_id, run_id)
-                contest.runs.complete_poll(poll, 200, invalid, now=now)
+                contest.runs.complete_polls((poll,), 200, invalid, now=now)
                 stored = contest.duels.show('duel-1')['attempts'][0]
                 self.assertEqual(stored['submission'], 'accepted')
                 self.assertIsNone(stored['arena_result'])
                 self.assertIsNone(contest.runs.next_review())
-        poll = contest.runs.claim_poll(now=300)
-        contest.runs.complete_poll(poll, 200, {'run_id': run_id, 'state': 'finished'}, now=300)
+        now = (len(invalid_payloads) + 1) * 60
+        poll = contest.runs.claim_poll(now=now)
+        contest.runs.complete_polls((poll,), 200, run_query_payload(finished), now=now)
         accepted = contest.duels.show('duel-1')
-        contest.runs.complete_poll(poll, 200, {'run_id': run_id, 'state': 'build_failed'}, now=301)
-        self.assertIsNone(contest.runs.claim_poll(now=400))
+        contest.runs.complete_polls((poll,), 200, run_query_payload(dict(finished, state='build_failed')), now=now + 1)
+        self.assertIsNone(contest.runs.claim_poll(now=now + 60))
         self.assertEqual(client.json(f'{path}/duel-1/result'), pending_result)
         self.assertEqual(contest.duels.show('duel-1'), accepted)
 
@@ -153,7 +157,7 @@ class HttpServiceTests(WorkspaceFixture):
                     self.assertIn(message, completed.stderr)
                 self.assertFalse((self.root / 'var').exists())
 
-    @case('L0-023', '通过 HTTP 调用 Arena 并向 Portal 提供整场结果')
+    @case('L0-023', '决赛经统一接口查询单个执行并向 Portal 提供整场结果')
     def test_http_arena_and_portal_queries_work_without_tokens(self):
         archive = self.root / 'archives'
         pools = write_map_pools(self.root / 'config/map-pools.json', 'final')
@@ -185,10 +189,15 @@ class HttpServiceTests(WorkspaceFixture):
                 self.assertEqual((request['duel_id'], request['rules'], request['bots']),
                                  ('duel-from-config', 'final', TEAMS))
                 run_id = request['run_id']
-                run_path = f'/arena-peer/arena/v1/runs/{run_id}'
-                lookup = received.get(timeout=5)
-                self.assertEqual((lookup['method'], lookup['path']), ('GET', run_path))
-                self.assertNotIn('authorization', lookup['headers'])
+                query_path = '/arena-peer/arena/v1/runs/query'
+
+                def check_run_query(event):
+                    self.assertEqual((event['method'], event['path']), ('POST', query_path))
+                    self.assertEqual(event['body'], {'run_ids': [run_id]})
+                    self.assertEqual(event['headers']['content-type'], 'application/json')
+                    self.assertNotIn('authorization', event['headers'])
+
+                check_run_query(received.get(timeout=5))
 
                 bots = [{'team_id': team, 'commit': f'{index:040x}', 'state': 'failed'}
                         for index, team in enumerate(request['bots'], 1)]
@@ -205,9 +214,8 @@ class HttpServiceTests(WorkspaceFixture):
 
                 self.assertEqual(client.json('/admin/arena/status', headers=auth), status)
                 queried = received.get(timeout=5)
-                while queried['path'] == run_path:
-                    self.assertEqual(queried['method'], 'GET')
-                    self.assertNotIn('authorization', queried['headers'])
+                while queried['path'] == query_path:
+                    check_run_query(queried)
                     queried = received.get(timeout=5)
                 self.assertEqual((queried['method'], queried['path']), ('GET', '/arena-peer/arena/v1/status'))
                 self.assertNotIn('authorization', queried['headers'])

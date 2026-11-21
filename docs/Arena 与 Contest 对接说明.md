@@ -9,8 +9,7 @@ Arena 与 Contest 部署在同一台 Linux 服务器，接口使用本机 HTTP�
 | 用途 | 方法与路径 | 成功响应 |
 | --- | --- | --- |
 | 提交单局执行 | `POST /arena/v1/runs` | `202 Accepted`，空响应体 |
-| 查询单局执行 | `GET /arena/v1/runs/{run_id}` | `200 OK`，状态 JSON |
-| 批量查询执行 | `POST /arena/v1/runs/query` | `200 OK`，逐局状态及未找到的编号 |
+| 查询单局执行（支持批量） | `POST /arena/v1/runs/query` | `200 OK`，逐局状态及未找到的编号 |
 | 查询整体运行状态 | `GET /arena/v1/status` | `200 OK`，运行统计 JSON |
 
 HTTP 报文与归档中的 JSON、JSONL 使用 UTF-8。错误响应是包含稳定 `code` 的 JSON 对象，可附 `message`。时间采用带 `+08:00` 的 ISO 8601 格式。
@@ -90,17 +89,44 @@ curl -i -X POST 'http://127.0.0.1:18080/arena/v1/runs' \
 
 ## 3. 查询单局执行
 
-`GET /arena/v1/runs/{run_id}` 的请求体为空。按路径中的完整 `run_id` 查找执行，编号格式无效时返回 `400 INVALID_RUN_ID`，编号不存在时返回 `404 RUN_NOT_FOUND`。已受理的执行返回 `200 OK` 和状态 JSON，响应带 `Cache-Control: no-store`，正文中的 `run_id` 与路径一致。
+`POST /arena/v1/runs/query` 是所有赛程共用的只读查询接口。请求使用 `Content-Type: application/json`，`run_ids` 包含 1 至 100 个互不重复的完整执行编号，含尝试后缀。查询单局时使用相同接口，例如 `{"run_ids":["run-1201.1"]}`。
 
-### 3.1 单局执行状态
+### 3.1 批量查询
+
+在同一次请求的 `run_ids` 中放入多局编号。以下示例同时查询三个当前尝试。
 
 ```sh
-curl -i 'http://127.0.0.1:18080/arena/v1/runs/run-7001.1'
+curl -i 'http://127.0.0.1:18080/arena/v1/runs/query' \
+  -H 'Content-Type: application/json' \
+  --data '{"run_ids":["run-1201.1","run-1207.2","run-1213.1"]}'
 ```
 
+有效请求返回 `200 OK` 和 `Cache-Control: no-store`。已受理的编号及状态放在 `runs`，未知编号放在 `missing_run_ids`。每个请求编号恰好出现在其中一个数组一次。两个数组的顺序均可与请求不同，Contest 按 `run_id` 匹配。
+
 ```json
-{"run_id": "run-7001.1", "state": "running"}
+{
+  "runs": [
+    {"run_id": "run-1207.2", "state": "finished"},
+    {"run_id": "run-1201.1", "state": "running"}
+  ],
+  "missing_run_ids": ["run-1213.1"]
+}
 ```
+
+如果所有编号均未知，仍返回 `200`，`runs` 为空数组。若请求格式或编号无效、编号重复或数组大小超出 1 至 100 条，返回 `400 INVALID_RUN_QUERY`。HTTP 错误、响应遗漏请求编号或包含重复或未请求编号时，Contest 按整批查询失败处理。
+
+### 3.2 Contest 轮询规则
+
+| 场景 | 查询节奏 |
+| --- | --- |
+| 正式初赛、独立压测 | 每 10 秒一轮。查询已受理或提交未确认、尚未取得终态的当前尝试。每批最多 100 个编号，按批次顺序发送。例如同一轮有 103 个待查编号时，发出 100 条和 3 条两次请求。上一轮还未结束时跳过当前定时点，查询失败的尝试留到下一轮 |
+| 天梯、决赛 | 每次发送一个编号。返回 `queued` 或 `running` 后至少等待 0.5 秒再查询，失败时从 1 秒退避至最多 30 秒 |
+
+已确认受理的编号进入 `missing_run_ids` 时提示主办方核对。同批其他编号的有效状态仍可落库。
+
+主办方结束压测批次或录入决赛资格判负后，Contest 停止提交和查询对应对决的单局，忽略在途响应。
+
+### 3.3 单局执行状态
 
 | `state` | 含义 | 返回该状态前须发布的归档 |
 | --- | --- | --- |
@@ -112,7 +138,7 @@ curl -i 'http://127.0.0.1:18080/arena/v1/runs/run-7001.1'
 
 `finished`、`build_failed` 和 `platform_error` 是该尝试的终态。`platform_error` 的响应字段固定为 `run_id`、`state` 和 `reason`，其余状态的响应字段固定为 `run_id` 和 `state`。
 
-以下为第 2.2 节中第一次尝试超时后的查询响应，HTTP 状态为 `200`。
+第 2.2 节中的第一次尝试超时后，`runs` 数组中的对应条目如下。
 
 ```json
 {"run_id": "run-7001.1", "state": "platform_error", "reason": "wall_timeout"}
@@ -126,35 +152,11 @@ curl -i 'http://127.0.0.1:18080/arena/v1/runs/run-7001.1'
 | `slot_unhealthy` | 槽位健康检查失败或运行条件不符合要求 |
 | `build_platform_error` | 构建阶段因平台故障中断 |
 
-### 3.2 执行恢复与重跑
+### 3.4 执行恢复与重跑
 
 重启后，已受理的待执行任务继续执行，已保存的终态按原 `run_id` 可查。归档已完整发布、终态尚未保存时，核对归档后恢复终态。已启动且无法恢复的执行置为 `platform_error`，保留已有诊断材料，并按中断阶段填写 `reason`，例如构建中断使用 `build_platform_error`，裁判进程中断使用 `judge_crash`。
 
 平台故障排除后，由主办方从 Contest 发起重跑。例如 `run-7001.1` 超时后，Contest 为同一预定局提交 `run-7001.2`，只递增尝试后缀。为新编号记录独立的状态和归档，原编号保留原终态和证据。重跑复用第 6.1 节的固定版本和天梯开始时间，缺少固定记录时按平台故障处理。
-
-### 3.3 批量查询执行
-
-`POST /arena/v1/runs/query` 是只读查询，请求使用 `Content-Type: application/json`。`run_ids` 包含 1 至 100 个互不重复的完整执行编号。
-
-```json
-{"run_ids": ["run-7001.1", "run-7002.1", "run-7003.1"]}
-```
-
-Arena 按 `run_id` 索引一次读取整批状态。有效请求返回 `200 OK` 和 `Cache-Control: no-store`。每个请求编号恰好出现在 `runs` 或 `missing_run_ids` 中一次，数组顺序任意。`runs` 的每项与第 3.1 节的单局响应使用相同的字段和归档发布条件。
-
-```json
-{
-  "runs": [
-    {"run_id": "run-7001.1", "state": "running"},
-    {"run_id": "run-7002.1", "state": "finished"}
-  ],
-  "missing_run_ids": ["run-7003.1"]
-}
-```
-
-有效请求中的未知编号归入 `missing_run_ids`，同批已受理的编号仍返回各自状态。请求格式无效、编号重复或数量超出范围时返回 `400 INVALID_RUN_QUERY`。
-
-正式初赛每 10 秒选取一轮当前待查尝试，包含已受理或提交未确认且尚未取得终态的执行。每批最多 100 个编号，顺序发出。上一轮尚未结束时跳过该定时点。某批失败后，相关执行按原状态等待下一轮。以 `missing_run_ids` 核对提交未确认的任务，已确认受理后查不到则提示主办方核对。Arena 部署此接口后可接入新版 Contest 的初赛流程。
 
 ## 4. 查询整体运行状态
 
@@ -206,13 +208,22 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
         └── <run_id>.log    # 该队本次构建的日志，若有
 ```
 
-第 3.1 节列出的必需文件须先在最终路径可读，随后持久化并返回终态。可先在同一文件系统的 `.staging/<run_id>/` 写齐并核对单局文件，再将目录原子重命名为 `runs/<run_id>/`。构建日志按上图路径单独交付。最终归档和已有日志按完整执行编号永久保留。
+第 3.3 节列出的必需文件须先在最终路径可读，随后持久化并返回终态。可先在同一文件系统的 `.staging/<run_id>/` 写齐并核对单局文件，再将目录原子重命名为 `runs/<run_id>/`。构建日志按上图路径单独交付。最终归档和已有日志按完整执行编号永久保留。
 
 将实际产生的 Bot 标准输出和标准错误合并到对应的 `p0.stderr.log` 或 `p1.stderr.log`，每份最多 1 MB。构建日志按实际产生情况保留。日志文本使用 UTF-8。资源分配和隔离证据须能按完整 `run_id` 提供。
 
 ### 5.1 完成清单
 
-`duel-1901` 第一局重跑完成后，查询 `run-7001.2` 返回 `{"run_id":"run-7001.2","state":"finished"}`。下例是此时的 `runs/run-7001.2/match.json`，其中 `result` 字段取自该次裁判的 `/out/result.json`。
+`duel-1901` 第一局重跑完成后，Contest 向 `POST /arena/v1/runs/query` 发送 `{"run_ids":["run-7001.2"]}`，收到以下响应。
+
+```json
+{
+  "runs": [{"run_id": "run-7001.2", "state": "finished"}],
+  "missing_run_ids": []
+}
+```
+
+随后 Contest 读取 `runs/run-7001.2/match.json`。其中 `result` 取自该次裁判的 `/out/result.json`。
 
 ```json
 {
@@ -272,7 +283,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 | `init` | 初始网格、束斑和得分 |
 | `frames` | 逐回合记录命令、束斑、得分、奖励、订单、道具、事件和格子变化。可选的 `frames[].ms` 供界面显示 |
 | `result` | 终局结果及已结算回合数 |
-| `engine_version`、`observations` | 正式比赛必填，记录引擎版本和按原顺序排列的裁判观测 |
+| `engine_version`、`observations` | 所有已完成的单局必填，记录当前引擎版本和按原顺序排列的裁判观测 |
 
 `log.jsonl` 按观测顺序每行保存一个 JSON 对象，双方数组按出生点编号排列。
 
@@ -286,11 +297,13 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 
 原样交付裁判生成的 `replay.json` 和 `log.jsonl`。同版引擎复算使用观测中的整数微秒。
 
+已复核的单局需要人工裁定时，Contest 单独保存生效胜方和理由，Arena 继续提供对应 `run_id` 的原始清单、回放与日志。
+
 ## 6. 运行裁判
 
 ### 6.1 固定参赛版本与开始时间
 
-天梯使用挑战开始时各队仓库的 `main` 分支提交，基准 Bot 使用当期版本。初赛单循环和决赛使用该赛段提交截止、仓库锁定时记录的 `main` 分支最终提交。
+天梯使用挑战开始时各队仓库的 `main` 分支提交，基准 Bot 使用当期版本。初赛单循环和决赛使用该赛段提交截止、仓库锁定时记录的 `main` 分支最终提交。独立压测使用初赛规则与测试名单中队伍的已固定提交，`duel_id` 以 `duel-load-` 开头，`run_id` 继续由 Contest 在同一编号序列中分配。
 
 首次构建前按 `duel_id` 持久保存参赛方编号与固定版本的对应关系。同场各局及重跑按参赛方编号取固定版本，再按该局 `bots` 的顺序分配到出生点。首次尝试未生成归档时，固定记录仍须保留。
 
@@ -341,7 +354,7 @@ docker build --platform linux/amd64 -f contest/judge/Dockerfile -t exposure-judg
 | `POST /v1/matches/{match_id}/turns/{turn}` | 200 毫秒内返回 `200` 和当前回合的 `turn`、`cmd`。超时、格式无效或连接失败记 1 次错误 |
 | `POST /v1/matches/{match_id}/end` | 时限 1 秒，超时或失败维持已确定的结果 |
 
-本局累计 10 次错误或 Bot 自身退出均触发技术判负，因自身内存超限被终止按退出处理。由平台导致的容器启动失败或运行条件故障按第 3.1 节报告 `platform_error`。
+本局累计 10 次错误或 Bot 自身退出均触发技术判负，因自身内存超限被终止按退出处理。由平台导致的容器启动失败或运行条件故障按第 3.3 节报告 `platform_error`。
 
 镜像入口为 `python -B -u -m judge`。下例使用本地构建的镜像，运行前须创建本局隔离网络、同网络的 Bot 服务及对应目录。正式环境使用所交付的镜像。
 

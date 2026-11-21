@@ -89,7 +89,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, practice.replays.list_replays())
         match = re.fullmatch(r'/api/replays/([\w.-]+)', path)
         if match:
-            return self.send(200, raw=practice.replays.replay_path(match[1]).read_bytes())
+            return self.send(200, practice.replays.load_replay(match[1]))
         if path == '/api/tournaments':
             return self.send(200, practice.tournament_list())
         match = re.fullmatch(r'/api/tournaments/([\w.-]+)', path)
@@ -100,8 +100,8 @@ class Handler(BaseHTTPRequestHandler):
     def match_resource(self, match_id, resource, turn, seat):
         practice = self.practice
         if resource == 'replay':
-            data = practice.replays.replay_path(match_id).read_bytes()
-            return self.send(200, raw=data, extra={'Content-Disposition': f'attachment; filename="{match_id}.json"'})
+            return self.send(200, practice.replays.load_replay(match_id),
+                             extra={'Content-Disposition': f'attachment; filename="{match_id}.json"'})
         if seat is not None:
             log = practice.replays.stderr_path(match_id, seat)
             return self.send(200, raw=log.read_bytes()[-200000:] if log.is_file() else b'',
@@ -152,22 +152,23 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Connection', 'close')
         self.end_headers()
         self.close_connection = True
-        offset, synced = 0, False
+
+        def send_event(event):
+            self.wfile.write(b'data: ' + dumps(event).encode('utf-8') + b'\n\n')
+
         try:
-            while True:
-                batch = live.events_after(offset, timeout=15 if synced else 0)
+            snapshot, status = live.event_snapshot()
+            send_event({'ev': 'snapshot', 'events': snapshot, 'status': status})
+            self.wfile.flush()
+            batch, offset = snapshot, len(snapshot)
+            while not batch or batch[-1]['ev'] != 'end':
+                batch = live.events_after(offset, timeout=15)
                 offset += len(batch)
-                if not batch and synced:
+                if not batch:
                     self.wfile.write(b': keepalive\n\n')
                 for event in batch:
-                    self.wfile.write(b'data: ' + dumps(event).encode('utf-8') + b'\n\n')
-                finished = batch and batch[-1]['ev'] == 'end'
-                if not synced and not finished:
-                    self.wfile.write(b'data: {"ev":"synced"}\n\n')
+                    send_event(event)
                 self.wfile.flush()
-                if finished:
-                    return
-                synced = True
         except (BrokenPipeError, ConnectionResetError):
             pass
 
