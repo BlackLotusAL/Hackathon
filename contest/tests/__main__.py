@@ -1,4 +1,4 @@
-"""Select functional priorities with ``python -B contest/tests --level L0``."""
+"""Run the Contest L0 suite with ``python -B -m tests``."""
 import argparse
 from pathlib import Path
 import unittest
@@ -13,8 +13,8 @@ def cases_in(suite):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='按功能重要程度运行 Contest 测试')
-    parser.add_argument('--level', choices=('L0', 'L1', 'L2', 'all'), default='L0')
+    parser = argparse.ArgumentParser(description='运行 Contest 的 L0 核心测试')
+    parser.add_argument('--level', choices=('L0', 'all'), default='L0')
     parser.add_argument('--list', action='store_true', help='仅列出用例编号及对应测试')
     args = parser.parse_args(argv)
     directory = Path(__file__).resolve().parent
@@ -27,14 +27,13 @@ def main(argv=None):
         method = getattr(test, test._testMethodName)
         identifier = getattr(method, 'case_id', None)
         if identifier is None:
-            parser.error(f'测试未分级: {test.id()}')
+            parser.error(f'测试缺少用例编号: {test.id()}')
         if identifier in identifiers:
             parser.error(f'用例编号重复: {identifier}')
         identifiers.add(identifier)
-        if args.level == 'all' or identifier.startswith(args.level + '-'):
-            selected.append((identifier, test))
+        selected.append((identifier, test))
     if not selected:
-        parser.error(f'{args.level} 没有可运行的用例')
+        parser.error('没有可运行的 L0 用例')
     selected.sort(key=lambda entry: entry[0])
     if args.list:
         for identifier, test in selected:

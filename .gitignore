@@ -221,15 +221,3 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
-
-# Contest local configuration, databases and judge outputs
-/contest/config/*.json
-!/contest/config/*.example.json
-/contest/**/*.sqlite
-/contest/**/*.sqlite-*
-/contest/maps.json
-/contest/task.json
-/contest/out/
-
-# Player Kit replays written by local matches
-/player-kit/replays/[0-9]*.json

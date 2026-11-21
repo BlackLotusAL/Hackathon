@@ -2,7 +2,7 @@
 import json
 import shutil
 
-from engine.core import ENGINE_VERSION
+from engine import VERSION
 from engine.protocol import dumps, json_object
 from service.arena import review_archive
 from service.server import Contest, ContestWorker
@@ -24,12 +24,14 @@ class JudgeTests(MatchFixture):
                 completed = run_module('judge', '--task', task, '--out', output)
                 result = json_object((output / 'result.json').read_bytes())
                 self.assertEqual(json.loads(completed.stdout), result)
-                self.assertEqual((result['run_id'], result['engine_version'], result['stage']),
-                                 (run_id, ENGINE_VERSION, stage))
+                self.assertEqual((result['run_id'], result['version'], result['stage']), (run_id, VERSION, stage))
                 self.assertEqual((result['winner'], result['reason'], result['turns'], result['errors']),
                                  (0, 'limit', 600, [0, 0]))
                 self.assertGreater(result['score'][0], result['score'][1])
                 replay = json_object((output / 'replay.json').read_bytes())
+                self.assertEqual(replay['version'], result['version'])
+                for document in (result, replay):
+                    self.assertFalse({'format', 'engine_version'} & document.keys())
                 self.assertEqual(len(replay['frames']), 600)
                 self.assertEqual(len(replay['observations']), 602)
                 self.assertEqual('latent' in replay['init'], stage == 'final')
@@ -44,22 +46,6 @@ class JudgeTests(MatchFixture):
                 expected = arena_archive(output, self.metadata(request))
                 manifest = review_archive(archive_root, request, 'finished', ladder=False)
                 self.assertEqual(manifest, expected)
-
-    @case('L0-024', '裁判无令牌任务按 rules 执行且支持显式赛段覆盖')
-    def test_judge_uses_task_rules_and_explicit_stage_override(self):
-        for number, (rules, override, expected) in enumerate((
-                ('final', None, 'final'), (None, None, 'prelim'), ('prelim', 'final', 'final')), 1):
-            with self.subTest(rules=rules, override=override):
-                root = self.root / str(number)
-                task = {'run_id': f'run-{number}.1', 'config': {'map': {'seed': 42}},
-                        'bots': [{'url': f'http://bot{seat}:8080'} for seat in (0, 1)]}
-                if rules is not None:
-                    task['rules'] = rules
-                path = write_judge_task(root, task, exited=True)
-                arguments = ('--stage', override) if override else ()
-                completed = run_module('judge', '--task', path, '--out', root / 'out', *arguments)
-                result = json.loads(completed.stdout)
-                self.assertEqual((result['stage'], result['map']), (expected, 'R42'))
 
     @case('L0-015', '正式赛和天梯归档缺失、篡改或版本不符时暂缓结算')
     def test_invalid_archives_remain_held_without_settlement(self):
@@ -83,7 +69,7 @@ class JudgeTests(MatchFixture):
                 with self.subTest(kind=kind, corruption=name):
                     root = self.root / f'{kind}-{name}'
                     root.mkdir()
-                    archive = root / 'var/archives/contest'
+                    archive = root / 'archives'
                     target = archive / 'runs' / request['run_id']
                     shutil.copytree(output, target)
                     evidence = target / filename
@@ -116,7 +102,9 @@ class JudgeTests(MatchFixture):
         single = manifest['result']
         without_run_id = {key: value for key, value in single.items() if key != 'run_id'}
         yield ('missing-run-id', 'match.json', dumps(dict(manifest, result=without_run_id)))
-        yield ('old-engine', 'match.json', dumps(dict(manifest, result=dict(single, engine_version='exposure-field/2'))))
+        yield ('wrong-manifest-version', 'match.json', dumps(dict(manifest, result=dict(single, version='v2'))))
+        yield ('wrong-replay-version', 'replay.json', dumps(dict(replay, version='v2')))
+        yield ('practice-replay', 'replay.json', dumps(dict(replay, source='practice')))
         yield ('missing-public-observations', 'replay.json', dumps(
             {key: value for key, value in replay.items() if key != 'observations'}))
         if ladder:

@@ -1,8 +1,6 @@
 """Encode the public replay produced by a formal match."""
-from .core import ENGINE_VERSION, PARAMS, PRELIM_PARAMS
-
-
-FORMAT = 'match-replay/2'
+from . import VERSION
+from .core import PARAMS, PRELIM_PARAMS
 
 
 def replay_map(board):
@@ -52,8 +50,7 @@ class Recorder:
         initial = dict(zip(layers, self.previous))
         initial.update(_sides(game))
         self.data = {
-            'format': FORMAT,
-            'engine_version': ENGINE_VERSION,
+            'version': VERSION,
             'map': replay_map(game.map),
             'stage': game.stage,
             'players': list(players),

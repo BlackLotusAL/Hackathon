@@ -235,7 +235,7 @@ aside section { padding: 14px; }
   let timer = null;
 
   function validate(data) {
-    if (data?.format !== 'match-replay/2') throw new Error('请选择试打生成的回放 JSON。');
+    if (data?.version !== 'v1') throw new Error('回放版本无效或不受支持。');
     const { map, init, players, frames, result } = data;
     const size = map?.size;
     if (!Number.isInteger(size) || size < 1 || size > 128 || !Array.isArray(map.terrain) ||

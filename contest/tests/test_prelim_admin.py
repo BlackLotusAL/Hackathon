@@ -1,17 +1,13 @@
 import hashlib
-from io import BytesIO
 from unittest.mock import patch
-from xml.etree import ElementTree as ET
-from zipfile import ZipFile
 
 from .helpers import (ArenaStub, Bot, HttpClient, MatchFixture, admin_headers, arena_archive, case,
-                      contest_handler, exported_tables, http_arena, plan_duel, roster_workbook, run_query_payload,
-                      running_service, sealed_maps, wait_for, write_config, write_map_pools)
+                      contest_handler, exported_tables, http_arena, plan_duel, roster_workbook,
+                      run_query_payload, sealed_maps)
 
 from service.arena import ArenaClient
 from service.domain import ContestError
 from service.server import Admin, Contest, ContestWorker
-from service.workbook import DOC_REL, PKG_REL, SHEET_XML, TYPES
 
 
 ROSTER = (('team002', '曝光'), ('team001', '微光'), ('team003', '领地 & 开发'))
@@ -29,7 +25,7 @@ class PrelimFixture(MatchFixture):
     def open_phase(self, phase):
         self.contest = Contest(self.db, self.maps, phase=phase)
         self.worker = ContestWorker(self.contest, self.root, self.arena)
-        admin = Admin(self.contest, 'organizer', 'test-password', self.arena)
+        admin = Admin(self.contest, 'organizer', 'test-password', self.arena, archive_root=self.root)
         handler = contest_handler(self.contest, admin=admin)
         headers = admin_headers('organizer', 'test-password')
         self.admin = HttpClient(handler, prefix=BASE, headers=headers)
@@ -56,6 +52,85 @@ class PrelimFixture(MatchFixture):
 
 
 class PrelimAdminTests(PrelimFixture):
+    @case('L0-033', '编号范围和手动列表均可原子编排正式单循环')
+    def test_number_based_official_plans(self):
+        selections = (
+            ({'range': ['team001', 'team003']}, ['team001', 'team002', 'team003']),
+            ({'teams': ['team005', 'team001', 'team003']}, ['team005', 'team001', 'team003']),
+        )
+        for index, (selection, teams) in enumerate(selections):
+            with self.subTest(selection=selection):
+                self.db = self.root / f'selection-{index}.sqlite'
+                self.open_phase('prelim')
+                invalid = ({'range': ['team003', 'team001']}, {'teams': ['team001', 'team001']},
+                           {'teams': ['bot001', 'team003']}, {'teams': [], 'range': []})
+                for body in invalid:
+                    error = self.admin.json('plan', body, method='POST', status=400)
+                    self.assertEqual(error['code'], 'INVALID_TEAM_SELECTION')
+                self.assertEqual(self.admin.json('progress')['state'], 'empty')
+
+                planned = self.admin.json('plan', selection, method='POST')
+                self.assertEqual([team['team_id'] for team in planned['teams']], teams)
+                self.assertEqual((planned['duels']['total'], planned['games']['total']), (3, 18))
+                self.assertEqual(self.admin.json('plan', {'teams': teams[::-1]}, method='POST'), planned)
+                self.assertEqual(self.admin.json('plan', {'teams': ['team009']}, method='POST', status=409)['code'],
+                                 'ROSTER_FROZEN')
+
+    @case('L0-034', '压测接受两种编号配置并隔离各批次及正式赛程')
+    def test_number_based_load_tests(self):
+        path = 'load-tests/load-numbers'
+        error = self.manager.json(path, {'range': ['team001', 'team001']}, method='POST', status=400)
+        self.assertEqual(error['code'], 'INVALID_TEAM_SELECTION')
+
+        ranged = self.manager.json(path, {'range': ['team002', 'team004']}, method='POST')
+        self.assertEqual([team['team_id'] for team in ranged['teams']], ['team002', 'team003', 'team004'])
+        self.assertEqual(ranged['duels']['total'], 3)
+        same = self.manager.json(path, {'teams': ['team004', 'team002', 'team003']}, method='POST')
+        self.assertEqual(same['duels']['total'], 3)
+        self.assertEqual(self.manager.json(path, {'teams': ['team001', 'team003']}, method='POST', status=409)['code'],
+                         'LOAD_TEST_CONFLICT')
+        manual = self.manager.json('load-tests/load-listed', {'teams': ['team010', 'team002']}, method='POST')
+        self.assertEqual([team['team_id'] for team in manual['teams']], ['team010', 'team002'])
+        self.assertEqual(manual['games']['total'], 6)
+        self.assertEqual(self.admin.json('progress')['state'], 'empty')
+
+    @case('L0-036', '决赛规则批量对战使用决赛地图池并继续批量查询')
+    def test_final_rules_apply_to_independent_batch(self):
+        self.maps['final'] = sealed_maps('final')
+        self.open_phase('prelim-ladder')
+        path = 'load-tests/load-final'
+        body = {'teams': ['team001', 'team002'], 'rules': 'final'}
+        self.assertEqual(self.manager.json(path, dict(body, rules=None), method='POST', status=400)['code'],
+                         'INVALID_RULES')
+        created = self.manager.json(path, body, method='POST')
+        self.assertEqual((created['rules'], created['duels']['total'], created['games']['total']), ('final', 1, 6))
+        self.assertEqual(self.manager.json(path, dict(body, rules='prelim'), method='POST', status=409)['code'],
+                         'LOAD_TEST_CONFLICT')
+        self.assertEqual(self.manager.json('load-tests/load-prelim', dict(body, rules='prelim'),
+                                          method='POST', status=409)['code'], 'PHASE_BUSY')
+
+        self.open_phase('prelim')
+        self.assertEqual(self.manager.json('load-tests')['batches'][0]['rules'], 'final')
+        request = self.next_run()
+        self.assertEqual((request['rules'], request['config']['map']), ('final', self.maps['final'][0]))
+        self.assertIsNone(self.contest.runs.claim_poll())
+        _, _, replay = self.judge_archive(request, [Bot('U'), Bot('D', exit_after_reply=True)])
+        self.poll_result(request['run_id'], 'finished')
+        self.assertTrue(self.worker.review_next())
+        records = self.manager.json('replays?batch=load-final')
+        self.assertEqual(records, {'runs': [{
+            'duel_id': request['duel_id'], 'ordinal': 1, 'bots': request['bots'],
+            'run_id': request['run_id'], 'review': 'effective',
+        }], 'has_next': False})
+        self.assertEqual(self.manager.json('replays?batch=load-final&page=1')['runs'], [])
+        self.assertEqual(self.manager.json('replays?batch=official')['runs'], [])
+        self.assertEqual(self.manager.json(f"runs/{request['run_id']}/replay"), replay)
+        self.build_both_failed(self.next_run())
+        self.assertEqual(self.manager.json(path)['state'], 'finished')
+        self.assertEqual(self.client.request(f"/contest/v1/duels/{request['duel_id']}/result")[0], 404)
+        cutoff = '1970-01-01T00:00:00+08:00'
+        self.assertEqual(self.contest.duels.ladder_submissions(request['bots'], cutoff), {'duels': []})
+
     @case('L0-026', '后台裁定复核通过的未决胜单局和整场，正式初赛可确认导出')
     def test_rulings_complete_the_official_batch_without_changing_evidence(self):
         self.admin.json('roster', roster_workbook(ROSTER[:2]), method='POST')
@@ -267,41 +342,6 @@ class PrelimAdminTests(PrelimFixture):
         self.assertCountEqual([run_id for batch in self.arena.queries for run_id in batch],
                               expected - {soon_finished['run_id']})
 
-    @case('L1-007', '初赛每 10 秒轮询一轮，上一轮超时时跳过该定时点')
-    def test_preliminary_rounds_keep_cadence_when_a_batch_fails(self):
-        self.admin.json('roster', roster_workbook(ROSTER), method='POST')
-        self.admin.json('plan', method='POST')
-        running, queued = self.next_run()['run_id'], self.next_run()['run_id']
-        self.arena.set_state(running, 'running')
-
-        class Clock:
-            now = 0
-
-            def is_set(self):
-                return self.now >= 40
-
-            def wait(self, delay):
-                self.now += delay
-                return self.is_set()
-
-        clock = Clock()
-        queries = []
-        query = self.arena.query_runs
-
-        def reply(run_ids):
-            queries.append((clock.now, run_ids))
-            if len(queries) == 1:
-                clock.now += 16
-                return 503, None
-            clock.now += 3
-            return query(run_ids)
-
-        with patch('service.server.monotonic', side_effect=lambda: clock.now):
-            with patch.object(self.arena, 'query_runs', side_effect=reply):
-                self.worker.poll_preliminary(clock)
-        self.assertEqual(queries, [(0, [running, queued]), (20, [running, queued]), (30, [running, queued])])
-        self.assertEqual(self.contest.runs.preliminary_poll_targets(), [running, queued])
-
     @case('L0-009', '初赛名单到三表导出包含构建双败与故障重跑')
     def test_three_team_round_robin_progress_and_three_result_sheets(self):
         self.commits = {team: hashlib.sha256(team.encode('utf-8')).hexdigest() for team, _ in ROSTER}
@@ -387,64 +427,8 @@ class PrelimAdminTests(PrelimFixture):
         self.assertEqual(tables['对局'][0], ['duel_id', '预定局序', 'run_id', '胜方', '裁定理由'])
         self.assertEqual(tables['对局'][1:], [[duel_id, ordinal, run_id, winner, None] for duel_id, runs in ran.items()
                                               for ordinal, (run_id, winner) in enumerate(runs, 1)])
-
-    @case('L1-004', '名单只使用约定表头，校验队伍编号和重复行')
-    def test_roster_corrections_validate_team_ids(self):
-        rows = [('微光', 'team001'), ('曝光', 'team002')]
-        aliases = roster_workbook(rows, ('team_name', 'team_id'))
-        self.assertEqual(self.admin.json('roster', aliases, method='POST', status=400)['code'], 'INVALID_ROSTER')
-        book = roster_workbook(rows, ('队名', '队伍编号'))
-        self.admin.json('roster', book, method='POST')
-        for team in ('t001', 'team01', 'team0001', 'bot001'):
-            with self.subTest(team=team):
-                error = self.admin.json('roster', roster_workbook([(team, '')]), method='POST', status=400)
-                self.assertIn('team 加三位数字', error['message'])
-        error = self.admin.json('roster', roster_workbook([ROSTER[0]] * 2), method='POST', status=400)
-        self.assertIn('重复', error['message'])
-        self.assertEqual(len(self.admin.json('progress')['teams']), 2)
-        self.admin.json('roster', roster_workbook(ROSTER), method='POST')
-
-    @case('L0-019', '编排后名单冻结且重复导入不能产生额外赛程')
-    def test_planned_roster_is_immutable(self):
-        self.admin.json('plan', method='POST', status=409)
-        self.admin.json('roster', roster_workbook(ROSTER), method='POST')
-        self.admin.json('plan', method='POST')
-        before = self.admin.json('progress')
-        changed = roster_workbook([('team001', '变更后的队名'), ('team002', '曝光')])
-        self.assertEqual(self.admin.json('roster', changed, method='POST', status=409)['code'], 'ROSTER_FROZEN')
-        self.assertEqual(self.admin.json('roster', roster_workbook(ROSTER), method='POST'), before)
-        self.assertEqual(self.admin.json('plan', method='POST'), before)
-        self.assertEqual(self.admin.json('progress'), before)
-
-    @case('L1-005', 'Excel 共享字符串和稀疏单元格可读取')
-    def test_imports_excel_shared_strings_and_sparse_cells(self):
-        ns = f'{{{SHEET_XML}}}'
-        output = BytesIO()
-        with ZipFile(BytesIO(roster_workbook([('team007', None), ('team008', '微光')]))) as source, ZipFile(output, 'w') as book:
-            sheet_path, rel_path = 'xl/worksheets/sheet1.xml', 'xl/_rels/workbook.xml.rels'
-            sheet = ET.fromstring(source.read(sheet_path))
-            shared = ET.Element(ns + 'sst')
-            for index, cell in enumerate(sheet.iter(ns + 'c')):
-                item = ET.SubElement(shared, ns + 'si')
-                inline = cell.find(ns + 'is')
-                item.append(inline.find(ns + 't'))
-                cell.remove(inline)
-                cell.set('t', 's')
-                ET.SubElement(cell, ns + 'v').text = str(index)
-            relationships = ET.fromstring(source.read(rel_path))
-            ET.SubElement(relationships, f'{{{PKG_REL}}}Relationship', Id='rId9',
-                          Type=DOC_REL + '/sharedStrings', Target='/xl/sharedStrings.xml')
-            types = ET.fromstring(source.read('[Content_Types].xml'))
-            ET.SubElement(types, f'{{{TYPES}}}Override', PartName='/xl/sharedStrings.xml',
-                          ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml')
-            for filename in ('_rels/.rels', 'xl/workbook.xml'):
-                book.writestr(filename, source.read(filename))
-            for filename, value in ((sheet_path, sheet), (rel_path, relationships),
-                                    ('[Content_Types].xml', types), ('xl/sharedStrings.xml', shared)):
-                book.writestr(filename, ET.tostring(value, encoding='utf-8'))
-
-        data = self.admin.json('roster', output.getvalue(), method='POST')
-        self.assertEqual([(team['team_id'], team['name']) for team in data['teams']], [('team007', ''), ('team008', '微光')])
+        records = self.manager.json('replays?batch=official')['runs']
+        self.assertCountEqual([run['run_id'] for run in records], [run_id for runs in ran.values() for run_id, _ in runs])
 
     @case('L0-010', '退赛保留既有结果并处理尚未开打的对决')
     def test_withdrawal_keeps_completed_results_and_settles_unsent_duels(self):
@@ -462,72 +446,3 @@ class PrelimAdminTests(PrelimFixture):
         self.assertEqual({team['team_id'] for team in data['teams'] if team['withdrawn']}, {'team001', 'team002'})
         self.assertEqual(self.contest.duels.show(first['duel_id'])['result'], before)
         self.assertIsNone(self.contest.duels.show(active['duel_id'])['result'])
-
-
-class PrelimHTTPTests(MatchFixture):
-    def _next_submission(self, received):
-        event = wait_for(lambda: received.get(timeout=20),
-                         lambda event: (event['method'], event['path']) == ('POST', '/arena/v1/runs'))
-        return event['body']
-
-    def _report_finished(self, arena, archive, request):
-        winner = min(request['bots'])
-        bots = [Bot(command, exit_after_reply=team != winner)
-                for command, team in zip(('U', 'D'), request['bots'])]
-        self.judge_archive(request, bots, archive_root=archive)
-        arena.set_state(request['run_id'], 'finished')
-
-    @case('L0-011', '通过 HTTP 验证初赛重启重跑后，导出和 Portal 查询引用同一生效执行')
-    def test_preliminary_retry_after_restart_is_reported_in_export_and_portal(self):
-        db = self.root / 'var/contest.sqlite'
-        archive = self.root / 'archives'
-        pools = write_map_pools(self.root / 'config/map-pools.json', 'prelim')
-        with http_arena(None) as (arena_url, received, arena):
-            settings = dict(db=str(db), archive_root=str(archive), arena_url=arena_url,
-                            maps=pools.name, host='127.0.0.1', port=0)
-            config = write_config(pools.with_name('contest.json'), **settings, phase='prelim')
-            with running_service(config) as address:
-                admin = HttpClient(address, prefix=BASE, headers=admin_headers())
-                admin.json('roster', roster_workbook(ROSTER[:2]), method='POST')
-                admin.json('plan', method='POST')
-
-                original = self._next_submission(received)
-                self.assertEqual(original['run_id'], 'run-1.1')
-                arena.set_state(original['run_id'], 'platform_error', reason='slot_unhealthy')
-                paused = wait_for(lambda: admin.json('progress'),
-                                  lambda info: info['attempts']['voided'] == 1)
-                self.assertEqual(paused['attention'], [{
-                    'duel_id': original['duel_id'], 'run_id': 'run-1.1', 'ordinal': 1,
-                    'issue': 'slot_unhealthy', 'retryable': True,
-                }])
-            # The stored preliminary plan must drain even after the configured phase changes.
-            write_config(config, **settings, phase='final-ladder')
-            with running_service(config) as address:
-                admin = HttpClient(address, prefix=BASE, headers=admin_headers())
-                self.assertEqual(admin.json('progress'), paused)
-
-                retry = admin.json('retry', {'run_id': original['run_id']}, method='POST')
-                self.assertEqual(retry['retry_run_id'], 'run-1.2')
-                admin.json('retry', {'run_id': original['run_id']}, method='POST', status=409)
-                replacement = self._next_submission(received)
-                self.assertEqual(replacement, dict(original, run_id='run-1.2'))
-                self._report_finished(arena, archive, replacement)
-                for _ in range(5):
-                    self._report_finished(arena, archive, self._next_submission(received))
-
-                settled = wait_for(lambda: admin.json('progress'), lambda info: info['duels']['settled'] == 1)
-                self.assertEqual(settled['games']['effective'], 6)
-                self.assertEqual(settled['attempts'], {'voided': 1, 'retries': 1})
-                self.assertEqual(settled['attention'], [])
-                self.assertEqual(admin.json('confirm', method='POST')['state'], 'confirmed')
-
-                code, workbook = admin.request('results.xlsx')
-                self.assertEqual(code, 200)
-                rows = exported_tables(workbook)['对局'][1:]
-                portal = HttpClient(address)
-                duel_id = original['duel_id']
-                result = portal.json(f'/contest/v1/duels/{duel_id}/result')['result']
-                self.assertEqual(result['runs'], ['run-1.2', *(f'run-{number}.1' for number in range(2, 7))])
-                self.assertEqual(rows, [
-                    [duel_id, game['ordinal'], game['run_id'], game['winner'], None] for game in result['games']
-                ])

@@ -1,6 +1,6 @@
 # Portal 与 Contest 对接说明
 
-Portal 通过统一的对决接口提交天梯挑战和预先编排的决赛场次，并按对决编号查询状态与结算。Contest 按导入名单编排初赛单循环。初赛名单与赛果使用 XLSX 交接，单局明细、回放和日志从共享归档读取。
+Portal 通过统一的对决接口提交天梯挑战和预先编排的决赛场次，并按对决编号查询状态与结算。Contest 按后台配置的队伍编号编排初赛单循环。初赛赛果使用 XLSX 交接，单局明细、回放和日志从共享归档读取。
 
 ## 1. 接口总览
 
@@ -25,7 +25,7 @@ Contest 从配置文件中的 `phase` 选择规则。切换配置并重启后，
 | 赛程 | Contest 配置 `phase` | 对决来源 | 地图安排 |
 | --- | --- | --- | --- |
 | 初赛天梯 | `prelim-ladder` | Portal 提交挑战 | Contest 为每场随机生成并固定一个种子，同图两局 |
-| 初赛单循环 | `prelim` | Contest 后台按导入名单编排并执行 | 初赛固定地图池，三图六局 |
+| 初赛单循环 | `prelim` | Contest 后台按配置的队伍编号编排并执行 | 初赛固定地图池，三图六局 |
 | 决赛天梯 | `final-ladder` | Portal 提交挑战 | Contest 为每场随机生成并固定一个种子，同图两局 |
 | 正式决赛 | `final` | Portal 按预编排的对阵逐场提交 | 决赛固定地图池，三图六局 |
 
@@ -184,7 +184,7 @@ Portal 保存返回的 `duel_id`，按第 3、4 章查询三图六局的进度�
 
 ### 5.1 文件交接流程
 
-1. 初赛提交截止后，Portal 以截止时已报名且代码仓库的 `main` 分支上有代码的队伍生成名单。主办方导出并留存 `队伍名单.xlsx`，在 Contest 后台导入。Contest 编排单循环并为每场生成 `duel_id`。
+1. 初赛提交截止后，Portal 以截止时已报名且代码仓库的 `main` 分支上有代码的队伍生成名单。主办方导出并留存 `队伍名单.xlsx`，核对后在 Contest 后台的「批量对战」选择「正式初赛」，填写编号范围或手动添加队伍编号。Contest 编排单循环并为每场生成 `duel_id`。
 2. 主办方在 Contest 确认赛果后，导出含「排名」「对决」「对局」三张工作表的 `初赛结果.xlsx`。
 3. Portal 校验并导入整本工作簿，保留 Contest 分配的 `duel_id`，主办方另行确认公示。
 
@@ -270,7 +270,7 @@ Portal 按以下要求校验并导入整本工作簿。
 
 ### 6.1 目录与执行编号
 
-Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂载路径可以不同，指向同一份存储。以下相对路径均以 Portal 的 `archive_root` 为基准。项目位于 `/srv/hackathon` 时，归档根目录示例为 `/srv/hackathon/contest/var/archives/contest/`。
+Portal 将 `archive_root` 设为 `/var/hackathon/archives`，以只读方式访问 Arena 发布归档所用的同一份存储。容器部署时只读挂载该宿主机目录，`archive_root` 填 Portal 容器内的绝对挂载路径。以下相对路径均以 Portal 的 `archive_root` 为基准。[Arena 归档交付要求](<Arena 与 Contest 对接说明.md#5-归档交付要求>)
 
 `duel_id` 标识整场，`ordinal` 是从 1 起的场内预定局序。`run_id` 由 Contest 为每次执行分配，匹配 `run-[0-9]+\.[1-9][0-9]*`。例如 `run-7001.2` 表示局号 7001 的第 2 次尝试，局号在同一归档中唯一。Portal 使用响应或工作簿给出的完整 `run_id` 拼接路径和设置缓存键。
 
@@ -290,7 +290,8 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 | --- | --- |
 | `bots` | 按当局出生点排列的两项。每项的 `team_id` 对应参赛方，`commit` 记录队伍的固定提交，基准 Bot 可省略提交号 |
 | `result.run_id` | 完成清单必填。裁判写入的完整执行编号，含尝试后缀，与读取本清单所用的 `run_id` 一致 |
-| `result.engine_version`、`result.map`、`result.map_sha256` | 实际引擎版本、地图编号和哈希。随机地图编号形如 `R42`，其中 42 为实际种子 |
+| `result.version` | 完成清单必填，取值为 `v1` |
+| `result.map`、`result.map_sha256` | 实际地图编号和哈希。随机地图编号形如 `R42`，其中 42 为实际种子 |
 | `result.winner`、`result.reason` | 胜方出生点 0 或 1（未决胜时为 `null`），以及裁判的单局终止原因，例如 `time` |
 | `result.score`、`result.bonus`、`result.lead_turns`、`result.time_us` | 按出生点排列的得分、累计订单奖励、领先回合数和累计响应时间。耗时以整数微秒保存，可按界面需要换算为毫秒 |
 | `result.turns` | 可选，已经结算的回合数 |
@@ -304,7 +305,7 @@ Portal 展示单局赛果时，以查询响应 `games[].winner` 或初赛「对�
 
 ### 6.3 回放读取
 
-`replay.json` 的 `format` 为 `match-replay/2`。`stage` 标识赛段，`players` 为按出生点排列的显示名，参赛方身份以清单中的 `bots[].team_id` 为准。`map` 包含尺寸 `size`、地形行 `terrain`、校准区中心 `calib`、订单区域 `orders` 和道具刷新点 `boost_points`。坐标原点为左上角，`x` 向右、`y` 向下。`terrain` 中 `.` 为普通格，`#` 为缺陷，`*` 为关键图形区。
+`replay.json` 的 `version` 为 `v1`。`stage` 标识赛段，`players` 为按出生点排列的显示名，参赛方身份以清单中的 `bots[].team_id` 为准。`map` 包含尺寸 `size`、地形行 `terrain`、校准区中心 `calib`、订单区域 `orders` 和道具刷新点 `boost_points`。坐标原点为左上角，`x` 向右、`y` 向下。`terrain` 中 `.` 为普通格，`#` 为缺陷，`*` 为关键图形区。
 
 1. 用 `init.owner` 和 `init.contour` 初始化归属和轮廓。两者均为按行展开的字符串，`.` 表示无主或无轮廓，`0` 和 `1` 表示出生点。决赛的 `init.latent` 记录潜像倒计时。
 2. 按 `frames[].turn` 播放。每项 `d` 是格子变化列表，每条为 `[格子编号, 归属, 轮廓]`，决赛附加潜像值。格子编号为 `y × size + x`。

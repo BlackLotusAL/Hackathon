@@ -7,7 +7,6 @@ DX = {'U': 0, 'D': 0, 'L': -1, 'R': 1}
 DY = {'U': -1, 'D': 1, 'L': 0, 'R': 0}
 OPP = {'U': 'D', 'D': 'U', 'L': 'R', 'R': 'L'}
 DIRS = ('U', 'D', 'L', 'R')
-ENGINE_VERSION = 'exposure-field/3'
 TIEBREAK_METRICS = ('score', 'bonus', 'lead_turns', 'time_us')
 
 

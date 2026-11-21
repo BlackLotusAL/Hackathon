@@ -1,7 +1,7 @@
 """Execute an Arena task and publish the referee's result and observations."""
 import time
 
-from engine.core import ENGINE_VERSION
+from engine import VERSION
 from engine.mapgen import load_map
 from engine.protocol import RUN_ID, dumps, json_object
 from engine.referee import HttpBot, Match
@@ -54,7 +54,7 @@ def run_task(task_path, output, stage=None):
         names.append(name)
         bots.append(ContainerBot(url, task_path.parent / 'exits' / f'p{seat}.json'))
     result = Match(board, bots, names=names, stage=stage, run_id=run_id, out_dir=output).run()
-    result.update(engine_version=ENGINE_VERSION, map_sha256=digest)
+    result.update(version=VERSION, map_sha256=digest)
     temporary = output / 'result.json.tmp'
     temporary.write_text(dumps(result) + '\n', encoding='utf-8')
     temporary.replace(output / 'result.json')

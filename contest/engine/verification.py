@@ -2,11 +2,11 @@
 import json
 import re
 
-from . import mapgen
-from .core import (ENGINE_VERSION, Game, PARAMS, REQUEST_STATES, STARTUP_STATES, TIME_LIMIT_STATES,
+from . import VERSION, mapgen
+from .core import (Game, PARAMS, REQUEST_STATES, STARTUP_STATES, TIME_LIMIT_STATES,
                    apply_startup, apply_turn)
 from .protocol import json_object
-from .replay import FORMAT, Recorder, game_result, public_observation, replay_map
+from .replay import Recorder, game_result, public_observation, replay_map
 
 
 class VerificationError(ValueError):
@@ -165,12 +165,14 @@ def _recompute(recorder, frames, observations, log):
 
 
 def _replay_game(replay, board):
+    version = replay.get('version')
+    if version != VERSION:
+        raise VerificationError(f'回放版本不受支持（{version!r}）')
+    if replay.get('source') == 'practice':
+        raise VerificationError('正式复核需要裁判回放')
     stage = replay['stage']
-    if replay['format'] != FORMAT or stage not in ('prelim', 'final'):
-        raise VerificationError('回放格式或赛段无效')
-    version = replay.get('engine_version')
-    if version != ENGINE_VERSION:
-        raise VerificationError(f'无可用的同版引擎 {version}')
+    if stage not in ('prelim', 'final'):
+        raise VerificationError('回放赛段无效')
     if board is None:
         board = replay['map']
         if (not isinstance(board.get('id'), str) or not board['id']

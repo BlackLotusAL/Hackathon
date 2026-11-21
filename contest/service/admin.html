@@ -5,184 +5,627 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>赛事管理 · Contest</title>
   <style>
-    :root { font-family: Inter, system-ui, "Microsoft YaHei", sans-serif; color: #172540; background: #f4f6fb; }
-    body { margin: 0; }
-    main { max-width: 70rem; margin: auto; padding: clamp(1rem, 4vw, 3rem); }
-    header { display: flex; align-items: baseline; flex-wrap: wrap; gap: .5rem 1rem; margin-bottom: 1.5rem; }
-    h1 { font-size: clamp(1.6rem, 4vw, 2.4rem); margin: 0; }
-    h2 { font-size: 1.08rem; margin: 0 0 1rem; }
-    section { background: #fff; border: 1px solid #dce4f1; border-radius: .75rem; padding: 1.2rem; margin-bottom: 1rem; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 1rem; }
-    .actions, form { display: flex; align-items: center; flex-wrap: wrap; gap: .75rem; }
-    form { margin: 0; }
-    input, select, button, a[download] { font: inherit; }
-    input[type=file] { max-width: 100%; }
-    button, a[download] { display: inline-block; padding: .55rem .85rem; border: 1px solid #bac8e0;
-      border-radius: .45rem; background: #fff; color: #1d3c75; text-decoration: none; cursor: pointer; }
-    #plan, a[download] { background: #214fba; border-color: #214fba; color: #fff; }
-    button:disabled, a[aria-disabled=true] { color: #576782; background: #eef2f8; border-color: #dce4f1; cursor: default; }
-    a[aria-disabled=true] { pointer-events: none; }
-    :focus-visible { outline: 2px solid #214fba; outline-offset: 3px; }
-    .muted, #state { color: #4b5d7b; }
-    .message { min-height: 1.3em; margin: .75rem 0 0; }
-    .message[data-error] { color: #9c2933; }
-    dl { display: grid; grid-template-columns: 1fr auto; gap: .55rem 1rem; margin: 0; }
-    dd { margin: 0; font-weight: 650; font-variant-numeric: tabular-nums; }
-    .scroll { overflow: auto; }
-    table { width: 100%; border-collapse: collapse; text-align: left; }
-    th, td { padding: .5rem .65rem; border-bottom: 1px solid #e5ebf5; }
-    summary { cursor: pointer; font-weight: 650; margin: .25rem 0; }
-    .withdraw { padding-top: .9rem; margin-top: .9rem; border-top: 1px solid #e5ebf5; }
+    :root {
+      color-scheme: light dark;
+      --bg: #f2f3f0;
+      --surface: #fff;
+      --ink: #15171a;
+      --muted: #5d636b;
+      --line: #d5d8d3;
+      --accent: #f2c200;
+      --blue: #2459e0;
+      --red: #d6402f;
+      --error: #b4232c;
+      --online: #0e8a5f;
+      --body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, Consolas, monospace;
+      --ease: cubic-bezier(.2, .7, .2, 1);
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #121416;
+        --surface: #1b1e21;
+        --ink: #eceeea;
+        --muted: #a0a6ad;
+        --line: #33383d;
+        --blue: #5b8cff;
+        --red: #ff6b5a;
+        --error: #ff7a7f;
+        --online: #3ccf98;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 var(--body); }
+    h1, h2, p, dl, dd { margin: 0; }
+    h2 { font-size: 20px; line-height: 1.35; }
+    button, input, textarea, select { font: inherit; color: inherit; }
     [hidden] { display: none !important; }
+    :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+    .wrap { max-width: 1280px; margin-inline: auto; padding-inline: clamp(16px, 4vw, 34px); }
+    .mono, code { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .muted { color: var(--muted); font-size: 13px; }
+
+    .top { position: sticky; top: 0; z-index: 2; background: var(--bg); border-bottom: 3px solid var(--ink); }
+    .top .wrap { min-height: 64px; display: flex; align-items: center; gap: 20px; padding-block: 10px; }
+    .brand { display: flex; align-items: center; gap: 10px; white-space: nowrap; }
+    .brand strong { font-size: 18px; font-weight: 900; }
+    .brand .mono { color: var(--muted); font-size: 12px; }
+    .dot { display: inline-block; width: .3em; height: .3em; margin-left: .13em; background: var(--accent); }
+    .tabs { position: relative; display: flex; margin-left: auto; border: 1px solid var(--ink); background: var(--surface); }
+    .tabs a {
+      position: relative; z-index: 1; padding: 7px 16px; color: var(--ink); text-align: center;
+      text-decoration: none; white-space: nowrap; transition: color .25s;
+    }
+    .tabs a + a { border-left: 1px solid var(--line); }
+    .tabs a:hover:not([aria-current]) { box-shadow: inset 0 -3px var(--accent); }
+    .tabs a[aria-current="page"] { color: var(--bg); font-weight: 700; }
+    .tabs:not([data-slide]) a[aria-current="page"] { background: var(--ink); }
+    .tab-indicator {
+      position: absolute; inset-block: 0; left: 0; width: 0; background: var(--ink); pointer-events: none;
+      transition: transform .45s var(--ease), width .45s var(--ease);
+    }
+    .arena-indicator { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--muted); font-size: 12px; }
+    .arena-indicator::before { content: ""; width: 8px; height: 8px; background: var(--accent); }
+    .arena-indicator[data-online]::before { background: var(--online); }
+
+    main { padding-bottom: 52px; }
+    .page-head { padding-block: 36px 28px; }
+    .page-head h1 { font-size: clamp(34px, 5vw, 52px); font-weight: 900; line-height: 1.1; }
+    .page:not([hidden]) > .reveal {
+      animation: rise .6s var(--ease) both;
+      animation-delay: var(--reveal-delay, 0ms);
+    }
+    .page > .reveal:nth-child(2) { --reveal-delay: 60ms; }
+    .page > .reveal:nth-child(3) { --reveal-delay: 120ms; }
+    .page > .reveal:nth-child(n+4) { --reveal-delay: 180ms; }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(14px); }
+      to { opacity: 1; transform: none; }
+    }
+    .columns { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+    .block { min-width: 0; margin-top: 28px; }
+    .columns.first > .block, .page > .block.first { margin-top: 0; }
+    .section-head {
+      display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
+      gap: 4px 12px; padding-bottom: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--ink);
+    }
+    .panel { min-width: 0; padding: 16px; background: var(--surface); border: 1px solid var(--ink); }
+    .panel > * + *, .form-stack > * + * { margin-top: 12px; }
+    .actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .panel-actions { padding-top: 12px; border-top: 1px solid var(--line); }
+
+    button, .button {
+      display: inline-flex; justify-content: center; align-items: center; gap: 6px;
+      padding: 7px 14px; border: 1px solid var(--ink); border-radius: 0; background: var(--surface);
+      color: var(--ink); font-weight: 650; text-decoration: none; cursor: pointer;
+    }
+    .primary { background: var(--ink); color: var(--bg); }
+    button:hover:not(:disabled), .button[href]:hover { background: var(--accent); border-color: var(--accent); color: #15171a; }
+    button:disabled, .button[aria-disabled="true"] { opacity: .45; cursor: default; }
+    .field { display: grid; gap: 4px; min-width: 0; font-size: 13px; font-weight: 650; }
+    input[type="text"], input[type="url"], textarea, select {
+      width: 100%; min-width: 0; padding: 7px 9px; border: 1px solid var(--line);
+      border-radius: 0; background: var(--surface); font-size: 14px; font-weight: 400;
+    }
+    input[type="text"]:hover, input[type="url"]:hover, textarea:hover, select:hover { border-color: var(--ink); }
+    input::placeholder, textarea::placeholder { color: var(--muted); opacity: 1; }
+    textarea { display: block; resize: vertical; }
+    fieldset { min-width: 0; margin-inline: 0; padding: 0; border: 0; }
+    legend { margin-bottom: 5px; padding: 0; font-size: 13px; font-weight: 650; }
+    .team-selection { display: grid; gap: 10px; }
+    .segment { display: grid; grid-template-columns: 1fr 1fr; width: min(100%, 290px); border: 1px solid var(--ink); }
+    .segment label { position: relative; cursor: pointer; }
+    .segment label + label { border-left: 1px solid var(--ink); }
+    .segment input { position: absolute; width: 1px; height: 1px; margin: 0; opacity: 0; }
+    .segment span { display: block; padding: 6px 12px; text-align: center; transition: background .2s, color .2s; }
+    .segment input:checked + span { background: var(--ink); color: var(--bg); font-weight: 700; }
+    .segment input:focus-visible + span {
+      position: relative; z-index: 1; outline: 3px solid var(--accent); outline-offset: 2px;
+    }
+    .input-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    [data-team-count] { font-variant-numeric: tabular-nums; }
+    .message { overflow-wrap: anywhere; font-size: 13px; }
+    .message:empty { display: none; }
+    .message[data-error] { color: var(--error); }
+
+    .stats-list > div { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; }
+    .stats-list > div + div { border-top: 1px solid var(--line); }
+    .stats-list > div:first-child { padding-top: 0; }
+    .stats-list > div:last-child { padding-bottom: 0; }
+    dd { font-weight: 650; overflow-wrap: anywhere; }
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1px; background: var(--ink); border: 1px solid var(--ink);
+    }
+    .stats-grid > div { min-width: 0; background: var(--surface); padding: 10px 12px; }
+    .stats-grid dt { color: var(--muted); font-size: 12px; }
+    .stats-grid dd { font-size: 19px; }
+    .stats-list dd, .stats-grid dd { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .scroll { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }
+    th, td { padding: 8px 10px; border-bottom: 1px solid var(--line); }
+    th { background: var(--bg); font-weight: 700; white-space: nowrap; }
+    tr:last-child td { border-bottom: 0; }
+    td { overflow-wrap: anywhere; }
+    .table-frame { border: 1px solid var(--ink); background: var(--surface); }
+    summary { width: fit-content; font-weight: 650; cursor: pointer; }
+    details[open] > :not(summary) { margin-top: 8px; }
+    .inline-form { display: grid; gap: 8px; }
+
+    .duel-grid {
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, 1.05fr);
+      gap: 1px; background: var(--ink); border: 1px solid var(--ink);
+    }
+    .duel-cell { min-width: 0; padding: 16px; background: var(--surface); }
+    .duel-cell.team-a { box-shadow: inset 0 4px var(--blue); }
+    .duel-cell.team-b { box-shadow: inset 0 4px var(--red); }
+    .duel-submit { margin-top: 12px; }
+    .duel-submit .message { margin-top: 8px; }
+    .history-controls { display: flex; align-items: end; gap: 8px; }
+    .history-controls .field { flex: 1; }
+    .result-line { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; }
+    .replay-link { padding: 2px 8px; font-family: var(--mono); white-space: nowrap; }
+    #match-replay {
+      --replay-cell: #e6e8e3; --replay-defect: #3b4149; --replay-key: #f2c200;
+      --replay-order: #a26100; --replay-boost: #8546bd;
+      scroll-margin-top: 112px;
+    }
+    .replay-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+    .replay-board { padding: 10px; border: 1px solid var(--ink); background: var(--surface); }
+    .replay-board canvas { display: block; width: 100%; aspect-ratio: 1; }
+    .replay-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+    .replay-legend i { display: inline-block; width: 11px; height: 11px; margin-right: 5px; vertical-align: -1px; }
+    .replay-info { display: grid; min-width: 0; gap: 12px; }
+    .replay-scores { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--ink); }
+    .replay-side { padding: 10px 12px; background: var(--surface); overflow-wrap: anywhere; border-top: 4px solid var(--blue); }
+    .replay-side + .replay-side { border-left: 1px solid var(--ink); border-top-color: var(--red); }
+    .replay-side [data-score] { display: block; font-size: 29px; line-height: 1.15; }
+    .replay-side [data-state] { font-size: 12px; color: var(--muted); }
+    .replay-timeline { width: 100%; margin: 0; accent-color: var(--ink); }
+    .replay-controls button { padding: 5px 9px; }
+    .replay-controls [aria-pressed="true"] { background: var(--accent); color: #15171a; border-color: var(--accent); }
+    .replay-detail { padding: 6px 9px; border-left: 3px solid var(--line); background: var(--surface); font-size: 13px; }
+    #replay-order[data-active] { border-color: var(--replay-order); }
+    #replay-boost[data-active] { border-color: var(--replay-boost); }
+    .replay-log { border-top: 1px solid var(--ink); }
+    .replay-log h3 { margin: 6px 0 2px; font-size: 13px; }
+    .replay-log ol { margin: 0; padding: 0; list-style: none; max-height: 224px; overflow-y: auto; font-size: 13px; }
+    .replay-log li { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+    @media (prefers-color-scheme: dark) {
+      #match-replay { --replay-cell: #303437; --replay-defect: #737985; --replay-order: #ffc266; --replay-boost: #c593ff; }
+    }
+
+    @media (max-width: 800px) {
+      .top .wrap { gap: 12px; }
+      .columns { grid-template-columns: minmax(0, 1fr); gap: 20px; }
+      .duel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .duel-grid > [data-rules] { grid-column: 1 / -1; }
+      .replay-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+    }
+    @media (max-width: 570px) {
+      .top .wrap { flex-wrap: wrap; }
+      .tabs { order: 1; margin-left: 0; flex-basis: 100%; }
+      .tabs a { flex: 1; padding-inline: 6px; }
+      .arena-indicator { margin-left: auto; }
+      .page-head { padding-block: 27px 20px; }
+      .panel, .duel-cell { padding: 12px; }
+    }
+    @media (max-width: 360px) {
+      .input-row { grid-template-columns: minmax(0, 1fr); }
+    }
+    .batch-progress { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 13px; }
+    .progress-bar { height: 7px; min-width: 70px; flex: 1; background: var(--line); }
+    .progress-bar i { display: block; width: 0; height: 100%; background: var(--accent); transition: width .4s var(--ease); }
+    .check-verdict {
+      display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px;
+      border-left: 4px solid var(--online); padding: 7px 10px; background: var(--bg); overflow-wrap: anywhere;
+    }
+    .check-verdict[data-level="fail"] { border-color: var(--error); }
+    .check-verdict[data-level="warn"] { border-color: var(--accent); }
+    .check-items { list-style: none; padding: 0; margin-bottom: 0; }
+    .check-items li {
+      display: grid; grid-template-columns: 40px minmax(100px, .8fr) minmax(0, 1.4fr); gap: 8px;
+      padding: 8px 0; border-top: 1px solid var(--line); overflow-wrap: anywhere;
+      animation: rise .4s var(--ease) both; animation-delay: calc(var(--item-index) * 55ms);
+    }
+    .check-state { font-size: 13px; color: var(--online); }
+    .check-state[data-level="fail"] { color: var(--error); }
+    .check-state[data-level="warn"] { color: var(--muted); }
+    #arena { margin-top: 8px; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .page:not([hidden]) > .reveal, .check-items li { animation: none; }
+      .tabs a, .tab-indicator, .segment span, .progress-bar i { transition: none; }
+    }
   </style>
 </head>
-<body>
-<main>
-  <header><h1>初赛单循环</h1><span id="state" role="status">正在读取进度</span></header>
-  <section aria-labelledby="manage-title">
-    <h2 id="manage-title">名单与赛果</h2>
-    <div class="actions">
-      <form id="import-form">
-        <label for="file">队伍名单 XLSX</label>
-        <input id="file" type="file" accept=".xlsx" required>
-        <button id="import" type="submit" disabled>导入名单</button>
-      </form>
-      <button id="plan" type="button" disabled>创建单循环</button>
-      <button id="confirm" type="button" disabled>确认赛果</button>
-      <a id="export" download="初赛结果.xlsx" aria-disabled="true">下载初赛结果</a>
-    </div>
-    <p id="message" class="message" role="status"></p>
-    <details>
-      <summary id="roster-title">队伍名单</summary>
-      <div class="scroll"><table><thead><tr><th>队伍编号</th><th>队名</th></tr></thead><tbody id="roster"></tbody></table></div>
-    </details>
-    <form class="withdraw" id="withdraw-form" hidden>
-      <label for="withdraw-team">退赛队伍</label>
-      <select id="withdraw-team" required></select>
-      <button id="withdraw" type="submit">登记退赛</button>
-      <span class="muted">未下达 Arena 的场次按整场判负处理。</span>
-    </form>
-  </section>
-  <div class="grid">
-    <section aria-labelledby="duels-title"><h2 id="duels-title">对决进度</h2><dl id="duels"></dl></section>
-    <section aria-labelledby="games-title"><h2 id="games-title">预定局进度</h2><dl id="games"></dl></section>
+<body data-phase="{{phase}}">
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><strong>曝光领地<span class="dot" aria-hidden="true"></span></strong><span class="mono">Contest</span></div>
+    <nav class="tabs" aria-label="赛事管理">
+      <a href="#duel" aria-current="page">单场对决</a>
+      <a href="#batch">批量对战</a>
+      <a href="#check">接口自检</a>
+      <span class="tab-indicator" aria-hidden="true"></span>
+    </nav>
+    <span id="arena-indicator" class="arena-indicator" role="status">连接 Arena 中</span>
   </div>
-  <section id="attention-section" aria-labelledby="attention-title" hidden>
-    <h2 id="attention-title">待处理记录</h2>
-    <div class="scroll"><table><thead><tr><th>对决编号</th><th>预定局序</th><th>执行编号</th><th>原因</th><th>操作</th></tr></thead><tbody id="attention"></tbody></table></div>
-  </section>
-  <section id="ranking-section" aria-labelledby="ranking-title" hidden>
-    <h2 id="ranking-title">初赛排名</h2>
-    <p id="ranking-status" class="muted" hidden></p>
-    <div class="scroll"><table><thead><tr><th>名次</th><th>队伍编号</th><th>胜局数</th><th>负局数</th></tr></thead><tbody id="ranking"></tbody></table></div>
-  </section>
-  <section aria-labelledby="ruling-title">
-    <h2 id="ruling-title">人工裁定</h2>
-    <form id="ruling-form" hidden>
-      <label for="ruling-target">待裁定场次</label>
-      <select id="ruling-target" required></select>
-      <label for="ruling-winner">胜方</label>
-      <select id="ruling-winner" required></select>
-      <label for="ruling-reason">裁定理由</label>
-      <input id="ruling-reason" type="text" required>
-      <button id="ruling-submit" type="submit">记录裁定</button>
-    </form>
-    <p id="ruling-detail" class="muted">正在读取待裁定场次</p>
-    <p id="ruling-message" class="message" role="status"></p>
-  </section>
-  <section aria-labelledby="load-title">
-    <h2 id="load-title">独立压测</h2>
-    <form id="load-form">
-      <label for="load-id">批次编号</label>
-      <input id="load-id" type="text" pattern="load-[A-Za-z0-9_\-]{1,40}" placeholder="load-trial-1" required>
-      <label for="load-file">压测名单 XLSX</label>
-      <input id="load-file" type="file" accept=".xlsx" required>
-      <button id="load-start" type="submit">启动压测</button>
-    </form>
-    <p id="load-message" class="message" role="status"></p>
-    <div id="load-details" hidden>
-      <p class="actions">
-        <label for="load-batch">查看批次</label> <select id="load-batch"></select>
-        <button type="button" id="load-stop" disabled>结束压测</button>
-      </p>
-      <dl id="load-progress"></dl>
-      <div id="load-attention-section" class="scroll" hidden>
-        <table><thead><tr><th>对决编号</th><th>预定局序</th><th>执行编号</th><th>原因</th><th>操作</th></tr></thead><tbody id="load-attention"></tbody></table>
+</header>
+
+<main class="wrap">
+  <section id="page-duel" class="page">
+    <header class="page-head reveal">
+      <h1>单场对决<span class="dot" aria-hidden="true"></span></h1>
+    </header>
+    <section class="block first reveal" aria-labelledby="manual-title">
+      <header class="section-head"><h2 id="manual-title">新对决</h2></header>
+      <form id="manual-form">
+        <div class="duel-grid">
+          <div class="duel-cell team-a">
+            <label class="field">队伍 1<input id="manual-team-a" class="mono" type="text" pattern="team[0-9]{3}" placeholder="team001" autocomplete="off" required></label>
+          </div>
+          <div class="duel-cell team-b">
+            <label class="field">队伍 2<input id="manual-team-b" class="mono" type="text" pattern="team[0-9]{3}" placeholder="team002" autocomplete="off" required></label>
+          </div>
+          <div class="duel-cell" data-rules></div>
+        </div>
+        <div class="duel-submit">
+          <button id="manual-start" class="primary" type="submit">发起对决</button>
+          <p id="manual-message" class="message" role="status"></p>
+        </div>
+      </form>
+    </section>
+    <section class="block reveal" id="manual-history" aria-labelledby="manual-history-title">
+      <header class="section-head"><h2 id="manual-history-title">对决记录</h2></header>
+      <div class="panel">
+        <p id="manual-empty" class="muted">暂无对决</p>
+        <div id="manual-details" class="form-stack" hidden>
+          <div class="history-controls">
+            <label class="field">查看对决<select id="manual-duel" class="mono"></select></label>
+            <button id="manual-stop" type="button" disabled>结束模拟</button>
+          </div>
+          <div class="result-line">
+            <code id="manual-duel-id"></code><strong id="manual-result"></strong>
+          </div>
+          <p id="manual-issue" class="message" data-error></p>
+          <div class="scroll"><table><thead><tr><th>局序</th><th>执行编号</th><th>状态</th><th>详情</th></tr></thead><tbody id="manual-runs"></tbody></table></div>
+          <p id="manual-replay-status" class="message" role="status"></p>
+        </div>
       </div>
-    </div>
+    </section>
+    <section class="block reveal" id="match-replay" aria-labelledby="replay-title" hidden>
+      <header class="section-head"><h2 id="replay-title">对局回放</h2><span id="replay-match" class="mono"></span></header>
+      <div class="replay-layout">
+        <div class="replay-board">
+          <canvas id="replay-canvas" role="img" aria-label="对局基板"></canvas>
+          <div class="replay-legend" id="replay-legend"></div>
+        </div>
+        <div class="replay-info">
+          <div class="replay-scores">
+            <div class="replay-side">
+              <strong>蓝方</strong> <span class="mono" data-team></span>
+              <strong class="mono" data-score></strong><p data-state></p>
+            </div>
+            <div class="replay-side">
+              <strong>红方</strong> <span class="mono" data-team></span>
+              <strong class="mono" data-score></strong><p data-state></p>
+            </div>
+          </div>
+          <div class="result-line"><span class="mono" id="replay-turn"></span><strong id="replay-result"></strong></div>
+          <input class="replay-timeline" id="replay-seek" type="range" min="0" max="0" value="0" aria-label="跳到回合">
+          <div class="actions replay-controls" role="group" aria-label="播放控制">
+            <button type="button" id="replay-restart">重新开始</button>
+            <button type="button" id="replay-back" aria-label="后退一回合">◀ 1</button>
+            <button type="button" id="replay-play" class="primary">播放</button>
+            <button type="button" id="replay-next" aria-label="前进一回合">1 ▶</button>
+            <button type="button" data-speed="4" aria-pressed="false" aria-label="每秒 4 回合">4 回合/秒</button>
+            <button type="button" data-speed="12" aria-pressed="true" aria-label="每秒 12 回合">12</button>
+            <button type="button" data-speed="40" aria-pressed="false" aria-label="每秒 40 回合">40</button>
+          </div>
+          <p class="replay-detail" id="replay-boost"></p>
+          <p class="replay-detail" id="replay-order"></p>
+          <div class="replay-log"><h3>最近事件</h3><ol id="replay-events"></ol></div>
+        </div>
+      </div>
+    </section>
   </section>
-  <section aria-labelledby="arena-title">
-    <h2 id="arena-title">Arena 槽位与队列</h2>
-    <p id="arena-time" class="muted">正在读取 Arena 状态</p>
-    <dl id="arena"></dl>
+
+  <section id="page-batch" class="page" hidden>
+    <header class="page-head reveal">
+      <h1>批量对战<span class="dot" aria-hidden="true"></span></h1>
+    </header>
+    <div class="columns first reveal">
+      <section class="block" aria-labelledby="batch-title">
+        <header class="section-head"><h2 id="batch-title">新建批次</h2></header>
+        <div class="panel">
+          <form id="batch-form" class="form-stack">
+            <div class="input-row">
+              <div data-rules></div>
+              <label class="field">批次类型
+                <select id="batch-type">
+                  <option value="independent">独立批次</option>
+                  <option id="batch-official" value="official">正式初赛</option>
+                </select>
+              </label>
+            </div>
+            <label id="batch-id-field" class="field">批次编号<input id="batch-id" class="mono" type="text" pattern="load-[A-Za-z0-9_\-]{1,40}" placeholder="load-trial-1" autocomplete="off" required></label>
+            <fieldset class="team-selection">
+              <legend>配置方式</legend>
+              <div class="segment">
+                <label><input type="radio" name="team-mode" value="range" checked><span>编号范围</span></label>
+                <label><input type="radio" name="team-mode" value="list"><span>手动添加</span></label>
+              </div>
+              <div class="input-row" data-range>
+                <label class="field">起始编号<input name="team-start" class="mono" type="text" placeholder="team001" autocomplete="off" required></label>
+                <label class="field">结束编号<input name="team-end" class="mono" type="text" placeholder="team010" autocomplete="off" required></label>
+              </div>
+              <label class="field" data-list hidden>
+                队伍编号
+                <textarea name="teams" class="mono" rows="3" placeholder="team001, team004, team007" spellcheck="false" required disabled></textarea>
+              </label>
+              <p class="muted" data-team-count hidden></p>
+            </fieldset>
+            <button id="batch-start" class="primary" type="submit">开始对战</button>
+          </form>
+          <p id="batch-message" class="message" role="status"></p>
+        </div>
+      </section>
+      <section class="block" aria-labelledby="batch-progress-title">
+        <header class="section-head"><h2 id="batch-progress-title">批次进度</h2></header>
+        <div class="panel">
+          <p id="batch-empty" class="muted">暂无批次</p>
+          <div id="batch-details" class="form-stack" hidden>
+            <div class="history-controls">
+              <label class="field">查看批次<select id="batch-history" class="mono"></select></label>
+              <button id="batch-stop" type="button" hidden>结束批次</button>
+            </div>
+            <div class="batch-progress">
+              <span id="batch-state"></span>
+              <div id="batch-bar" class="progress-bar" role="progressbar" aria-label="批次已结算场次" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></div>
+              <strong id="batch-count" class="mono"></strong>
+            </div>
+            <dl id="batch-stats" class="stats-list"></dl>
+            <details>
+              <summary id="roster-title">参赛队伍</summary>
+              <div class="scroll"><table><thead><tr><th>队伍编号</th><th>队名</th><th>状态</th></tr></thead><tbody id="roster"></tbody></table></div>
+            </details>
+            <div id="batch-actions" class="actions panel-actions" hidden>
+              <button id="confirm" type="button" disabled>确认赛果</button>
+              <a id="export" class="button" download="初赛结果.xlsx" aria-disabled="true">下载初赛结果</a>
+            </div>
+            <form id="withdraw-form" class="inline-form panel-actions" hidden>
+              <label class="field">退赛队伍<select id="withdraw-team" required></select></label>
+              <div><button id="withdraw" type="submit">登记退赛</button></div>
+            </form>
+          </div>
+        </div>
+      </section>
+    </div>
+    <section id="game-progress-section" class="block reveal" aria-labelledby="games-title" hidden>
+      <header class="section-head"><h2 id="games-title">预定局进度</h2></header>
+      <dl id="games" class="stats-grid"></dl>
+    </section>
+    <section id="attention-section" class="block reveal" aria-labelledby="attention-title" hidden>
+      <header class="section-head"><h2 id="attention-title">待处理记录</h2></header>
+      <div class="scroll table-frame"><table><thead><tr><th>对决编号</th><th>局序</th><th>执行编号</th><th>原因</th><th>操作</th></tr></thead><tbody id="attention"></tbody></table></div>
+    </section>
+    <section id="batch-replay-records" class="block reveal" aria-labelledby="batch-replay-title" hidden>
+      <header class="section-head"><h2 id="batch-replay-title">对局记录</h2></header>
+      <div class="panel">
+        <p id="batch-replay-empty" class="muted">暂无可播放的回放</p>
+        <div class="scroll" id="batch-replay-table" hidden>
+          <table><thead><tr><th>蓝方 / 红方</th><th>局序</th><th>执行编号</th><th>状态</th></tr></thead><tbody id="batch-replay-runs"></tbody></table>
+        </div>
+        <div class="actions" id="batch-replay-pages" hidden>
+          <button type="button" id="batch-replay-prev">上一页</button>
+          <button type="button" id="batch-replay-next">下一页</button>
+        </div>
+        <p id="batch-replay-status" class="message" role="status"></p>
+      </div>
+    </section>
+    <section id="ranking-section" class="block reveal" aria-labelledby="ranking-title" hidden>
+      <header class="section-head"><h2 id="ranking-title">初赛排名</h2></header>
+      <p id="ranking-status" class="message" role="status"></p>
+      <div class="scroll table-frame"><table><thead><tr><th>名次</th><th>队伍编号</th><th>胜局数</th><th>负局数</th></tr></thead><tbody id="ranking"></tbody></table></div>
+    </section>
+  </section>
+
+  <section id="page-check" class="page" hidden>
+    <header class="page-head reveal">
+      <h1>接口自检<span class="dot" aria-hidden="true"></span></h1>
+    </header>
+    <div class="columns first reveal">
+      <section class="block" aria-labelledby="check-title">
+        <header class="section-head"><h2 id="check-title">检查对象</h2></header>
+        <div class="panel">
+          <form id="check-form" class="form-stack">
+            <label class="field">Bot 服务地址<input id="check-target" class="mono" type="url" placeholder="http://127.0.0.1:18101" autocomplete="off" required></label>
+            <div data-rules></div>
+            <button id="check-start" class="primary" type="submit">开始自检</button>
+          </form>
+        </div>
+      </section>
+      <section class="block" aria-labelledby="check-report-title">
+        <header class="section-head"><h2 id="check-report-title">自检报告</h2></header>
+        <div class="panel">
+          <p id="check-status" class="message" role="status">暂无报告</p>
+          <div id="check-verdict" class="check-verdict" role="status" hidden>
+            <strong id="check-result"></strong>
+            <span id="check-report-target" class="mono"></span>
+          </div>
+          <ul id="check-items" class="check-items" hidden></ul>
+        </div>
+      </section>
+    </div>
+    <section class="block reveal" aria-labelledby="arena-title">
+      <header class="section-head"><h2 id="arena-title">Arena 槽位与队列</h2></header>
+      <p id="arena-time" class="muted">正在读取 Arena 状态</p>
+      <dl id="arena" class="stats-grid" hidden></dl>
+    </section>
+  </section>
+
+  <section id="ruling-section" class="block" aria-labelledby="ruling-title" hidden>
+    <header class="section-head"><h2 id="ruling-title">人工裁定</h2></header>
+    <div class="panel">
+      <form id="ruling-form" class="form-stack">
+        <label class="field">待裁定场次<select id="ruling-target" required></select></label>
+        <div class="input-row">
+          <label class="field">胜方<select id="ruling-winner" required></select></label>
+          <label class="field">裁定理由<input id="ruling-reason" type="text" required></label>
+        </div>
+        <p id="ruling-detail" class="message"></p>
+        <button id="ruling-submit" type="submit">记录裁定</button>
+      </form>
+      <p id="ruling-message" class="message" role="status"></p>
+    </div>
   </section>
 </main>
+
+<template id="rules-editor">
+  <fieldset>
+    <legend>对决规则</legend>
+    <div class="segment">
+      <label><input type="radio" name="rules" value="prelim" checked><span>初赛</span></label>
+      <label><input type="radio" name="rules" value="final"><span>决赛</span></label>
+    </div>
+  </fieldset>
+</template>
+
+<script src="/admin/replay.js"></script>
 <script>
   'use strict';
   const node = id => document.getElementById(id);
   const base = '/admin/prelim';
   const loadTests = '/admin/load-tests';
+  const manualDuels = '/admin/duels';
   const rulings = '/admin/rulings';
-  const jsonType = 'application/json';
-  const workbookType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  const teamId = /^team[0-9]{3}$/;
+  const prelimEnabled = document.body.dataset.phase === 'prelim';
+  const tabs = Array.from(document.querySelectorAll('.tabs a'));
+  const rulesLabel = {prelim: '初赛', final: '决赛'};
   const stateLabel = {
-    empty: '等待导入名单', roster_imported: '名单已导入', running: '单循环执行中',
-    awaiting_confirmation: '等待确认赛果', confirmed: '赛果已确认', finished: '压测完成', stopped: '压测已结束'
+    empty: '待配置', roster_imported: '待编排', running: '执行中',
+    awaiting_confirmation: '等待确认赛果', confirmed: '赛果已确认', finished: '已完成', stopped: '已结束'
   };
+  let activePage = 'duel';
   let changing = false;
   let version = 0;
-  let lastProgress;
+  let officialState;
+  let officialDraft = [];
+  let batchState;
+  let manualRunning = false;
+  let checking = false;
   let rankingRequested = false;
   let pendingRulings = [];
-  let selectedLoad = '';
+  let selectedBatch = '';
+  let selectedManual = '';
+  let autoReplay = false;
+  let replayRequest;
+  let replayPage = 0;
+
+  for (const element of document.querySelectorAll('[data-rules]')) {
+    element.append(node('rules-editor').content.cloneNode(true));
+  }
+  const formRules = id => node(id).elements.rules.value;
+  const isOfficialBatch = () => node('batch-type').value === 'official';
+
+  function teamEditor() {
+    const form = node('batch-form');
+    const rangeBox = form.querySelector('[data-range]');
+    const rangeFields = Array.from(rangeBox.querySelectorAll('input'));
+    const listBox = form.querySelector('[data-list]');
+    const listField = listBox.querySelector('textarea');
+    const listMode = form.querySelector('[value="list"]');
+    const summary = form.querySelector('[data-team-count]');
+    let edited = false;
+
+    function selection() {
+      const byRange = !listMode.checked;
+      const teams = byRange ? rangeFields.map(field => field.value.trim()) :
+        listField.value.split(/[\s,，、;；]+/u).filter(Boolean);
+      if (!teams.length || teams.some(team => !teamId.test(team))) {
+        throw new Error('队伍编号应为 team 加三位数字。');
+      }
+      let count = teams.length;
+      if (byRange) {
+        count = Number(teams[1].slice(4)) - Number(teams[0].slice(4)) + 1;
+        if (count < 1) throw new Error('起始编号不能大于结束编号。');
+      } else if (new Set(teams).size !== teams.length) {
+        throw new Error('队伍编号不能重复。');
+      }
+      if (!isOfficialBatch() && count < 2) throw new Error('独立批次至少需要两支队伍。');
+      return {body: byRange ? {range: teams} : {teams}, count};
+    }
+
+    function update() {
+      rangeBox.hidden = listMode.checked;
+      listBox.hidden = listField.disabled = !listMode.checked;
+      for (const field of rangeFields) field.disabled = listMode.checked;
+      try {
+        const {count} = selection();
+        const duels = count * (count - 1) / 2;
+        summary.textContent = `${count} 支队伍 · ${duels} 场对决 · ${duels * 6} 局`;
+        summary.hidden = false;
+      } catch {
+        summary.hidden = true;
+      }
+    }
+
+    form.addEventListener('input', event => {
+      if (event.target.closest('.team-selection')) {
+        edited = true;
+        update();
+      }
+    });
+
+    return {
+      read: () => selection().body,
+      update,
+      restore(teams) {
+        if (edited || teams.length === 0) return;
+        listMode.checked = true;
+        listField.value = teams.map(team => team.team_id).join('\n');
+      }
+    };
+  }
+
+  const batchEditor = teamEditor();
 
   function pairs(id, values) {
-    node(id).replaceChildren(...values.flatMap(([label, value]) => {
+    const items = values.map(([label, value]) => {
+      const pair = document.createElement('div');
       const term = document.createElement('dt');
       const detail = document.createElement('dd');
       term.textContent = label;
       detail.textContent = value;
-      return [term, detail];
-    }));
+      pair.append(term, detail);
+      return pair;
+    });
+    node(id).replaceChildren(...items);
   }
 
   function rows(id, data) {
-    node(id).replaceChildren(...data.map(record => {
+    const fragment = document.createDocumentFragment();
+    for (const record of data) {
       const row = document.createElement('tr');
       for (const value of record) {
         const cell = row.insertCell();
         if (value instanceof Node) cell.append(value);
         else cell.textContent = value ?? '';
       }
-      return row;
-    }));
+      fragment.append(row);
+    }
+    node(id).replaceChildren(fragment);
   }
 
-  function retryButton(item, path, messageId) {
-    if (!item.retryable) return '';
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.disabled = changing;
-    button.textContent = '重跑';
-    button.setAttribute('aria-label', `重跑 ${item.run_id}`);
-    button.addEventListener('click', () => change(
-      path, '已提交重跑', JSON.stringify({run_id: item.run_id}), jsonType, {messageId}
-    ));
-    return button;
-  }
-
-  function renderAttention(prefix, attention, path, messageId) {
-    node(`${prefix}attention-section`).hidden = attention.length === 0;
-    rows(`${prefix}attention`, attention.map(item => [
-      item.duel_id, item.ordinal, item.run_id, item.issue, retryButton(item, path, messageId)
-    ]));
-  }
-
-  function duelStats(duels) {
-    return [
-      ['已结算场次', `${duels.settled} / ${duels.total}`], ['待处理场次', duels.awaiting_action],
-      ['其余未结算', duels.pending]
-    ];
+  function selectOptions(id, options, selected = node(id).value) {
+    const select = node(id);
+    const sameOptions = select.options.length === options.length && options.every(([value, label], index) =>
+      select.options[index].value === value && select.options[index].text === label);
+    if (!sameOptions) select.replaceChildren(...options.map(([value, label]) => new Option(label, value)));
+    if (select.value !== selected && options.some(([value]) => value === selected)) select.value = selected;
   }
 
   function gameStats(games, attempts) {
@@ -190,43 +633,138 @@
       ['有效局数', `${games.effective} / ${games.total}`], ['裁定免打', games.waived],
       ['待提交', games.pending], ['等待 Arena 结果', games.waiting_result], ['待复核', games.waiting_review],
       ['待人工处理', games.awaiting_action], ['交付未确认', games.unconfirmed],
-      ['已登记重跑尝试', attempts.retries], ['累计作废尝试', attempts.voided]
+      ['重跑尝试', attempts.retries], ['作废尝试', attempts.voided]
     ];
   }
 
-  function render(data) {
-    lastProgress = data;
-    node('state').textContent = stateLabel[data.state];
-    const {duels, games, attempts, teams, attention} = data;
-    pairs('duels', duelStats(duels));
+function renderAttention(attention, path) {
+    node('attention-section').hidden = attention.length === 0;
+    rows('attention', attention.map(item => {
+      let action = '';
+      if (item.retryable) {
+        action = document.createElement('button');
+        action.type = 'button';
+        action.textContent = '重跑';
+        action.setAttribute('aria-label', `重跑 ${item.run_id}`);
+        action.addEventListener('click', () => change(path, '已提交重跑', {run_id: item.run_id}, {messageId: 'batch-message'}));
+      }
+      return [item.duel_id, item.ordinal, item.run_id, item.issue, action];
+    }));
+  }
+
+  function syncControls() {
+    const official = isOfficialBatch();
+    const frozen = official && !['empty', 'roster_imported'].includes(officialState);
+    node('batch-start').disabled = changing || frozen;
+    node('batch-start').textContent = frozen && officialState ? '正式初赛已编排' : '开始对战';
+    node('batch-stop').hidden = selectedBatch === 'official' || batchState !== 'running';
+    node('batch-stop').disabled = changing;
+    node('confirm').disabled = changing || selectedBatch !== 'official' || batchState !== 'awaiting_confirmation';
+    node('withdraw').disabled = changing;
+    node('manual-start').disabled = changing;
+    node('manual-stop').disabled = changing || !manualRunning;
+    node('ruling-submit').disabled = changing || !rulingSelection();
+  }
+
+  function syncBatchConfiguration() {
+    const allowed = prelimEnabled && formRules('batch-form') === 'prelim';
+    node('batch-official').hidden = node('batch-official').disabled = !allowed;
+    if (!allowed && isOfficialBatch()) node('batch-type').value = 'independent';
+    const official = isOfficialBatch();
+    node('batch-id-field').hidden = node('batch-id').disabled = official;
+    if (official) batchEditor.restore(officialDraft);
+    batchEditor.update();
+    syncControls();
+  }
+
+  function formatTime(time) {
+    return time ? time.slice(0, 19).replace('T', ' ') : '';
+  }
+
+  function selectBatch(batchId) {
+    if (selectedBatch === batchId) return;
+    selectedBatch = batchId;
+    batchState = undefined;
+    replayPage = 0;
+    clearReplay();
+    node('batch-replay-records').hidden = true;
+    syncControls();
+  }
+
+  async function refreshBatches(current) {
+    try {
+      const [official, history] = await Promise.all([request(`${base}/progress`), request(loadTests)]);
+      if (current !== version) return;
+      officialState = official.state;
+      officialDraft = officialState === 'roster_imported' ? official.teams : [];
+      syncBatchConfiguration();
+      const options = history.batches.map(batch => [batch.batch_id, `${batch.batch_id} · ${rulesLabel[batch.rules]}`]);
+      if (officialState !== 'empty') options.unshift(['official', '正式初赛']);
+      if (!options.some(([id]) => id === selectedBatch)) selectBatch(options[0]?.[0] || '');
+      selectOptions('batch-history', options, selectedBatch);
+      node('batch-empty').hidden = Boolean(selectedBatch);
+      node('batch-details').hidden = !selectedBatch;
+      if (!selectedBatch) {
+        node('game-progress-section').hidden = node('attention-section').hidden =
+          node('ranking-section').hidden = node('batch-replay-records').hidden = true;
+        return;
+      }
+      const details = selectedBatch === 'official' ? renderBatch(official) :
+        refreshSection(`${loadTests}/${selectedBatch}`, renderBatch, 'batch-message', current);
+      await Promise.all([details, refreshSection(`/admin/replays?batch=${encodeURIComponent(selectedBatch)}&page=${replayPage}`,
+        renderBatchReplays, 'batch-message', current)]);
+    } catch (error) {
+      if (current === version) message('batch-message', error.message, true);
+    }
+  }
+
+  function renderBatch(data) {
+    const {duels, games, attempts, teams, attention, state} = data;
+    const official = selectedBatch === 'official';
+    batchState = state;
+    node('batch-state').textContent = stateLabel[state];
+    node('batch-count').textContent = `${duels.settled} / ${duels.total}`;
+    const percent = duels.total ? Math.round(100 * duels.settled / duels.total) : 0;
+    const bar = node('batch-bar');
+    bar.setAttribute('aria-valuenow', String(percent));
+    bar.firstElementChild.style.width = `${percent}%`;
+    const stats = [
+      ['待处理场次', duels.awaiting_action],
+      ['其余未结算', duels.pending]
+    ];
+    if (!official) {
+      stats.push(['编排时间', formatTime(data.planned_at)], ['已用秒数', data.elapsed_seconds],
+                 ['每分钟结算场次', data.duels_per_minute]);
+      if (duels.cancelled) stats.push(['取消场次', duels.cancelled]);
+      if (games.cancelled) stats.push(['取消预定局', games.cancelled]);
+    }
+    pairs('batch-stats', stats);
     pairs('games', gameStats(games, attempts));
-    node('roster-title').textContent = `队伍名单（${teams.length}）`;
-    rows('roster', teams.map(team => [team.team_id, team.name]));
-    renderAttention('', attention, `${base}/retry`, 'message');
-    const canImport = ['empty', 'roster_imported'].includes(data.state);
-    node('file').disabled = changing || !canImport;
-    node('import').disabled = changing || !canImport;
-    node('plan').disabled = changing || data.state !== 'roster_imported';
-    node('confirm').disabled = changing || data.state !== 'awaiting_confirmation';
+    node('game-progress-section').hidden = state === 'roster_imported';
+    node('roster-title').textContent = `参赛队伍（${teams.length}）`;
+    rows('roster', teams.map(team => [team.team_id, team.name || '—', team.withdrawn ? '已退赛' : '参赛']));
+    const path = official ? base : `${loadTests}/${data.batch_id}`;
+    renderAttention(attention, `${path}/retry`);
+
+    node('batch-actions').hidden = !official;
     const download = node('export');
-    const confirmed = data.state === 'confirmed';
+    const confirmed = official && state === 'confirmed';
     download.setAttribute('aria-disabled', String(!confirmed));
     if (confirmed) download.href = `${base}/results.xlsx`;
     else download.removeAttribute('href');
-    const rankingReady = confirmed || data.state === 'awaiting_confirmation';
+    const rankingReady = official && (confirmed || state === 'awaiting_confirmation');
     node('ranking-section').hidden = !rankingReady;
     if (rankingReady && !rankingRequested) refreshRanking();
 
-    const select = node('withdraw-team');
     const available = teams.filter(team => !team.withdrawn);
-    node('withdraw-form').hidden = data.state !== 'running' || available.length === 0;
+    node('withdraw-form').hidden = !official || state !== 'running' || available.length === 0;
     if (!node('withdraw-form').hidden) {
-      const selected = select.value;
-      select.replaceChildren(new Option('请选择队伍', ''), ...available.map(team =>
-        new Option([team.team_id, team.name].filter(Boolean).join(' '), team.team_id)));
-      if (available.some(team => team.team_id === selected)) select.value = selected;
-      select.disabled = node('withdraw').disabled = changing;
+      selectOptions('withdraw-team', [
+        ['', '请选择队伍'],
+        ...available.map(team => [team.team_id, [team.team_id, team.name].filter(Boolean).join(' ')])
+      ]);
     }
+    syncControls();
   }
 
   function rulingSelection() {
@@ -235,51 +773,130 @@
 
   function renderRulingSelection() {
     const item = rulingSelection();
-    const winner = node('ruling-winner');
-    const previous = winner.value;
-    winner.replaceChildren(new Option('请选择胜方', ''), ...(item ? item.sides.map(side => new Option(side, side)) : []));
-    if (item && item.sides.includes(previous)) winner.value = previous;
-    node('ruling-detail').textContent = item ? `${item.issue} · ${item.sides.join(' 对 ')}` :
-      pendingRulings.length ? '请选择一个待裁定场次' : '当前没有待裁定场次';
-    node('ruling-submit').disabled = changing || !item;
-    winner.disabled = !item;
+    selectOptions('ruling-winner', [['', '请选择胜方'], ...(item ? item.sides.map(side => [side, side]) : [])]);
+    node('ruling-winner').disabled = !item;
+    node('ruling-detail').textContent = item ? `${item.issue} · ${item.sides.join(' 对 ')}` : '';
+    syncControls();
   }
 
   function renderRulings(data) {
     pendingRulings = data.pending;
-    const select = node('ruling-target');
-    const previous = select.value;
-    select.replaceChildren(new Option('请选择场次', ''), ...pendingRulings.map(item => {
+    const previous = node('ruling-target').value;
+    selectOptions('ruling-target', [['', '请选择场次'], ...pendingRulings.map(item => {
       const target = item.run_id || item.duel_id;
       const title = item.run_id ? `${target} · 第 ${item.ordinal} 局` : `${target} · 整场`;
-      return new Option(item.batch_id ? `${title} · ${item.batch_id === 'official' ? '正式初赛' : item.batch_id}` : title, target);
-    }));
-    if (pendingRulings.some(item => (item.run_id || item.duel_id) === previous)) select.value = previous;
-    else if (previous) node('ruling-reason').value = '';
-    node('ruling-form').hidden = pendingRulings.length === 0;
+      const batch = item.batch_id === 'official' ? '正式初赛' : item.batch_id;
+      const source = batch || (item.kind.startsWith('manual-') ? '单场模拟' : '');
+      return [target, source ? `${title} · ${source}` : title];
+    })]);
+    if (previous !== node('ruling-target').value) node('ruling-reason').value = '';
+    node('ruling-section').hidden = activePage === 'check' || pendingRulings.length === 0;
     renderRulingSelection();
   }
 
-  async function renderLoadTests(data, current) {
-    const selectable = data.batches.map(batch => batch.batch_id);
-    if (!selectable.includes(selectedLoad)) selectedLoad = selectable[0] || '';
-    node('load-batch').replaceChildren(...selectable.map(batch => new Option(batch, batch)));
-    node('load-batch').value = selectedLoad;
-    node('load-details').hidden = !selectedLoad;
-    node('load-stop').disabled = true;
-    if (selectedLoad) await refreshSection(`${loadTests}/${selectedLoad}`, renderLoadTest, 'load-message', current);
+  async function renderManualDuels(data, current) {
+    const options = data.duels.map(duel => [
+      duel.duel_id, `${duel.sides.join(' / ')} · ${rulesLabel[duel.rules]} · ${formatTime(duel.accepted_at)}`
+    ]);
+    if (!options.some(([id]) => id === selectedManual)) selectManual(options[0]?.[0] || '');
+    selectOptions('manual-duel', options, selectedManual);
+    node('manual-empty').hidden = Boolean(selectedManual);
+    node('manual-details').hidden = !selectedManual;
+    if (selectedManual) await refreshSection(`${manualDuels}/${selectedManual}`, renderManualDuel, 'manual-message', current);
   }
 
-  function renderLoadTest(data) {
-    pairs('load-progress', [
-      ['批次状态', stateLabel[data.state]], ['编排时间', data.planned_at],
-      ['结束时间', data.finished_at || data.stopped_at || '进行中'],
-      ['已用秒数', data.elapsed_seconds], ['每分钟结算场次', data.duels_per_minute],
-      ['取消场次', data.duels.cancelled], ['取消预定局', data.games.cancelled],
-      ...duelStats(data.duels), ...gameStats(data.games, data.attempts)
-    ]);
-    node('load-stop').disabled = changing || data.state !== 'running';
-    renderAttention('load-', data.attention, `${loadTests}/${data.batch_id}/retry`, 'load-message');
+  function renderBatchReplays({runs, has_next}) {
+    node('batch-replay-records').hidden = false;
+    node('batch-replay-empty').hidden = runs.length > 0;
+    node('batch-replay-table').hidden = runs.length === 0;
+    rows('batch-replay-runs', runs.map(run => [run.bots.join(' / '), run.ordinal, replayButton(run),
+      run.review === 'awaiting_ruling' ? '待人工裁定' : '已生效']));
+    node('batch-replay-pages').hidden = replayPage === 0 && !has_next;
+    node('batch-replay-prev').disabled = replayPage === 0;
+    node('batch-replay-next').disabled = !has_next;
+  }
+
+  function clearReplay() {
+    replayRequest?.abort();
+    ContestReplay.clear();
+    message('manual-replay-status', '');
+    message('batch-replay-status', '');
+  }
+
+  function selectManual(duelId, autoplay = false) {
+    if (selectedManual === duelId && !autoplay) return;
+    clearReplay();
+    selectedManual = duelId;
+    autoReplay = autoplay;
+    manualRunning = false;
+    syncControls();
+  }
+
+  async function playReplay(attempt) {
+    clearReplay();
+    const controller = new AbortController();
+    replayRequest = controller;
+    autoReplay = false;
+    const batch = activePage === 'batch';
+    const status = batch ? 'batch-replay-status' : 'manual-replay-status';
+    message(status, '正在加载回放…');
+    try {
+      const replay = await request(`/admin/runs/${encodeURIComponent(attempt.run_id)}/replay`, {signal: controller.signal});
+      if (controller.signal.aborted) return;
+      const player = node('match-replay');
+      node(batch ? 'batch-replay-records' : 'manual-history').after(player);
+      ContestReplay.load(replay, `第 ${attempt.ordinal} 局 · ${attempt.run_id}`);
+      message(status, '');
+      const behavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
+      player.scrollIntoView({behavior, block: 'start'});
+    } catch (error) {
+      if (!controller.signal.aborted) {
+        ContestReplay.clear();
+        message(status, error.message, true);
+      }
+    }
+  }
+
+  function replayButton(run) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'replay-link';
+    button.textContent = `${run.run_id} · 播放`;
+    button.setAttribute('aria-label', `播放第 ${run.ordinal} 局 ${run.run_id} 回放`);
+    button.addEventListener('click', () => playReplay(run));
+    return button;
+  }
+
+  function renderManualDuel(data) {
+    manualRunning = data.state === 'in_progress';
+    node('manual-duel-id').textContent = data.duel_id;
+    const result = data.result;
+    const sameTeam = data.sides[0] === data.sides[1];
+    let summary = manualRunning ? '等待结算' : '模拟已结束';
+    if (result) {
+      const winner = sameTeam ? ['蓝方', '红方'][result.winner] : result.winner;
+      summary = winner ? `${winner} 获胜` : result.outcome === 'draw' ? '平局' : '双方判负';
+      if (sameTeam) summary += ` · 蓝 ${result.games_won[0]} : ${result.games_won[1]} 红`;
+    }
+    node('manual-result').textContent = summary;
+    message('manual-issue', data.issue || '', true);
+    const statuses = {
+      pending: '待提交', sending: '提交中', accepted: 'Arena 已受理', rejected: 'Arena 已拒绝',
+      unconfirmed: '交付未确认', resend: '待补发', queued: 'Arena 排队中', running: 'Arena 执行中',
+      finished: '待复核', platform_error: '平台故障', build_failed: '构建失败', void: '已作废',
+      held: '暂缓生效', awaiting_ruling: '待人工裁定', effective: '已生效'
+    };
+    rows('manual-runs', data.attempts.map(attempt => [
+      attempt.ordinal, attempt.has_replay ? replayButton(attempt) : attempt.run_id,
+      statuses[attempt.review || attempt.arena_result?.state || attempt.submission],
+      attempt.issue || attempt.ruling?.reason || '—'
+    ]));
+    if (autoReplay) {
+      const ready = data.attempts.find(attempt => attempt.has_replay);
+      if (ready) playReplay(ready);
+      else message('manual-replay-status', '暂无可播放的回放');
+    }
+    syncControls();
   }
 
   async function request(path, options) {
@@ -294,36 +911,32 @@
     node(id).toggleAttribute('data-error', error);
   }
 
-  async function refreshSection(path, renderSection, messageId, current) {
+  async function refreshSection(path, render, messageId, current) {
     try {
       const data = await request(path);
-      if (current === version) await renderSection(data, current);
+      if (current === version) await render(data, current);
     } catch (error) {
       if (current === version) message(messageId, error.message, true);
     }
   }
 
-  async function refresh() {
-    if (changing) return;
-    const current = ++version;
-    await Promise.all([
-      refreshSection(`${base}/progress`, render, 'message', current),
-      refreshSection(rulings, renderRulings, 'ruling-message', current),
-      refreshSection(loadTests, renderLoadTests, 'load-message', current)
-    ]);
-  }
-
   async function refreshArena() {
+    const indicator = node('arena-indicator');
     try {
       const data = await request('/admin/arena/status');
-      node('arena-time').textContent = data.at;
       pairs('arena', [
         ['空闲槽位', data.slots.idle], ['使用中槽位', data.slots.busy], ['停用槽位', data.slots.disabled],
         ['排队执行', data.queue], ['近 10 分钟完成执行', data.done_10m], ['近 1 小时平台故障', data.platform_errors_1h]
       ]);
-    } catch (error) {
+      node('arena-time').textContent = `更新于 ${formatTime(data.at)}`;
+      node('arena').hidden = false;
+      indicator.textContent = 'Arena 已连接';
+      indicator.toggleAttribute('data-online', true);
+    } catch {
       node('arena-time').textContent = 'Arena 状态暂不可用';
-      node('arena').replaceChildren();
+      node('arena').hidden = true;
+      indicator.textContent = 'Arena 未连接';
+      indicator.toggleAttribute('data-online', false);
     }
   }
 
@@ -332,76 +945,206 @@
     try {
       const data = await request(`${base}/standings`);
       rows('ranking', data.rows);
-      node('ranking-status').hidden = true;
+      message('ranking-status', '');
     } catch (error) {
-      node('ranking-status').textContent = error.message;
-      node('ranking-status').hidden = false;
+      message('ranking-status', error.message, true);
       rankingRequested = false;
     }
   }
 
-  async function change(path, done, body, contentType, {messageId = 'message', onSuccess} = {}) {
+function post(path, data) {
+    const headers = {'X-Contest-Admin': '1'};
+    if (data !== undefined) headers['Content-Type'] = 'application/json';
+    return request(path, {method: 'POST', headers, body: JSON.stringify(data)});
+  }
+
+  function renderCheck(report) {
+    const failures = report.items.filter(item => item.level === 'fail').length;
+    const warnings = report.items.filter(item => item.level === 'warn').length;
+    const verdict = node('check-verdict');
+    verdict.dataset.level = failures ? 'fail' : warnings ? 'warn' : 'ok';
+    node('check-result').textContent = failures ? `${failures} 项未通过` : warnings ? `通过，${warnings} 项提醒` : '全部通过';
+    node('check-report-target').textContent = `${report.name} · ${rulesLabel[report.rules]}`;
+    verdict.hidden = false;
+
+    const statuses = {ok: '通过', warn: '提醒', fail: '失败'};
+    const results = report.items.map((item, index) => {
+      const row = document.createElement('li');
+      const state = document.createElement('span');
+      const name = document.createElement('strong');
+      const detail = document.createElement('span');
+      row.style.setProperty('--item-index', index);
+      state.className = 'check-state';
+      state.dataset.level = item.level;
+      state.textContent = statuses[item.level];
+      name.textContent = item.name;
+      detail.textContent = item.detail;
+      row.append(state, name, detail);
+      return row;
+    });
+    node('check-items').replaceChildren(...results);
+    node('check-items').hidden = false;
+  }
+
+  async function runCheck(event) {
+    event.preventDefault();
+    if (checking) return;
+    checking = true;
+    node('check-start').disabled = true;
+    node('check-verdict').hidden = node('check-items').hidden = true;
+    message('check-status', '自检中…');
+    try {
+      const report = await post('/admin/check', {target: node('check-target').value, rules: formRules('check-form')});
+      message('check-status', '');
+      renderCheck(report);
+    } catch (error) {
+      message('check-status', error.message, true);
+    } finally {
+      checking = false;
+      node('check-start').disabled = false;
+    }
+  }
+
+  function refresh() {
+    if (changing || activePage === 'check') return;
+    const current = ++version;
+    const content = activePage === 'batch' ? refreshBatches(current) :
+      refreshSection(manualDuels, renderManualDuels, 'manual-message', current);
+    return Promise.all([content, refreshSection(rulings, renderRulings, 'ruling-message', current)]);
+  }
+
+  async function change(path, done, data, {messageId, onSuccess}) {
     if (changing) return;
     changing = true;
     ++version;
-    if (lastProgress) render(lastProgress);
-    for (const id of ['load-start', 'load-stop', 'ruling-submit']) node(id).disabled = true;
-    const headers = {'X-Contest-Admin': '1'};
-    if (contentType) headers['Content-Type'] = contentType;
+    syncControls();
     try {
-      const data = await request(path, {method: 'POST', headers, body});
-      if (onSuccess) onSuccess(data);
+      const result = await post(path, data);
+      if (onSuccess) onSuccess(result);
       message(messageId, done);
     } catch (error) {
       message(messageId, error.message, true);
     } finally {
       changing = false;
-      node('load-start').disabled = false;
+      syncControls();
       await refresh();
     }
   }
 
-  node('import-form').addEventListener('submit', event => {
-    event.preventDefault();
-    const file = node('file').files[0];
-    if (file) change(`${base}/roster`, '名单已导入', file, workbookType);
+  function submit(formId, messageId, action) {
+    node(formId).addEventListener('submit', event => {
+      event.preventDefault();
+      if (changing) return;
+      try {
+        action();
+      } catch (error) {
+        message(messageId, error.message, true);
+      }
+    });
+  }
+
+  node('batch-form').addEventListener('change', event => {
+    if (event.target.name === 'rules' || event.target.id === 'batch-type') syncBatchConfiguration();
   });
-  node('plan').addEventListener('click', () => change(`${base}/plan`, '已创建单循环'));
-  node('confirm').addEventListener('click', () => change(`${base}/confirm`, '已确认初赛赛果'));
-  node('withdraw-form').addEventListener('submit', event => {
-    event.preventDefault();
-    change(`${base}/withdraw`, '已登记退赛', JSON.stringify({teams: [node('withdraw-team').value]}), jsonType);
+  submit('batch-form', 'batch-message', () => {
+    const data = batchEditor.read();
+    const options = {messageId: 'batch-message'};
+    if (isOfficialBatch()) {
+      change(`${base}/plan`, '正式初赛已编排', data, {
+        ...options, onSuccess: () => selectBatch('official')
+      });
+    } else {
+      const batch = encodeURIComponent(node('batch-id').value);
+      change(`${loadTests}/${batch}`, '批次已创建', {...data, rules: formRules('batch-form')}, {
+        ...options, onSuccess: result => selectBatch(result.batch_id)
+      });
+    }
   });
+  node('batch-history').addEventListener('change', event => {
+    selectBatch(event.target.value);
+    refresh();
+  });
+  for (const [id, step] of [['batch-replay-prev', -1], ['batch-replay-next', 1]]) {
+    node(id).addEventListener('click', () => {
+      replayPage += step;
+      node('batch-replay-prev').disabled = node('batch-replay-next').disabled = true;
+      refresh();
+    });
+  }
+  node('batch-stop').addEventListener('click', () => {
+    change(`${loadTests}/${selectedBatch}/stop`, '批次已结束', undefined, {messageId: 'batch-message'});
+  });
+  node('confirm').addEventListener('click', () => {
+    change(`${base}/confirm`, '已确认初赛赛果', undefined, {messageId: 'batch-message'});
+  });
+  submit('withdraw-form', 'batch-message', () => {
+    change(`${base}/withdraw`, '已登记退赛', {teams: [node('withdraw-team').value]}, {messageId: 'batch-message'});
+  });
+
+  submit('manual-form', 'manual-message', () => {
+    const sides = [node('manual-team-a').value, node('manual-team-b').value];
+    change(manualDuels, '对决已创建，等待 Arena 受理', {sides, rules: formRules('manual-form')}, {
+      messageId: 'manual-message', onSuccess: result => selectManual(result.duel_id)
+    });
+  });
+  node('manual-duel').addEventListener('change', event => {
+    selectManual(event.target.value, true);
+    refresh();
+  });
+  node('manual-stop').addEventListener('click', () => {
+    change(`${manualDuels}/${selectedManual}/stop`, '模拟已结束', undefined, {messageId: 'manual-message'});
+  });
+
   node('ruling-target').addEventListener('change', () => {
     node('ruling-winner').value = node('ruling-reason').value = '';
     renderRulingSelection();
   });
-  node('ruling-form').addEventListener('submit', event => {
-    event.preventDefault();
+  submit('ruling-form', 'ruling-message', () => {
     const item = rulingSelection();
     if (!item) return;
     const body = {scope: item.scope, target: item.run_id || item.duel_id,
       winner: node('ruling-winner').value, reason: node('ruling-reason').value};
-    change(rulings, '已记录裁定', JSON.stringify(body), jsonType, {
+    change(rulings, '已记录裁定', body, {
       messageId: 'ruling-message', onSuccess: () => { node('ruling-reason').value = ''; }
     });
   });
-  node('load-form').addEventListener('submit', event => {
-    event.preventDefault();
-    const file = node('load-file').files[0];
-    const batch = encodeURIComponent(node('load-id').value);
-    if (file) change(`${loadTests}/${batch}`, '压测批次已创建', file, workbookType, {
-      messageId: 'load-message', onSuccess: data => { selectedLoad = data.batch_id; }
-    });
-  });
-  node('load-batch').addEventListener('change', event => {
-    selectedLoad = event.target.value;
+  node('check-form').addEventListener('submit', runCheck);
+
+  function moveTabIndicator() {
+    const current = tabs.find(tab => tab.getAttribute('aria-current') === 'page');
+    const indicator = document.querySelector('.tab-indicator');
+    indicator.style.width = `${current.offsetWidth}px`;
+    indicator.style.transform = `translateX(${current.offsetLeft}px)`;
+    current.parentElement.setAttribute('data-slide', '');
+  }
+
+  function showPage() {
+    const previousPage = activePage;
+    const requested = location.hash.slice(1);
+    const page = requested === 'prelim' || requested === 'load' ? 'batch' : requested;
+    activePage = tabs.some(tab => tab.hash.slice(1) === page) ? page : 'duel';
+    for (const tab of tabs) {
+      const name = tab.hash.slice(1);
+      const active = name === activePage;
+      node(`page-${name}`).hidden = !active;
+      if (active) tab.setAttribute('aria-current', 'page');
+      else tab.removeAttribute('aria-current');
+    }
+    if (previousPage !== activePage) {
+      autoReplay = false;
+      clearReplay();
+    }
+    node('ruling-section').hidden = activePage === 'check' || pendingRulings.length === 0;
+    if (activePage === 'check') ++version;
+    window.scrollTo(0, 0);
+    moveTabIndicator();
     refresh();
-  });
-  node('load-stop').addEventListener('click', () => {
-    change(`${loadTests}/${selectedLoad}/stop`, '压测批次已结束', undefined, undefined, {messageId: 'load-message'});
-  });
-  refresh();
+  }
+
+  syncBatchConfiguration();
+  window.addEventListener('hashchange', showPage);
+  window.addEventListener('resize', moveTabIndicator);
+  showPage();
   refreshArena();
   setInterval(refresh, 5000);
   setInterval(refreshArena, 15000);

@@ -7,8 +7,8 @@ from uuid import uuid4
 
 from .arena import retry_attempt
 from .domain import (
-    DUEL_RULING_LABEL, DUEL_TIE_ISSUE, LOAD_TEST_ID, OFFICIAL_BATCH, TEAM_ID,
-    ZONE, ContestError, encode, require_phase,
+    BATTLE_RULES, DUEL_RULING_LABEL, DUEL_TIE_ISSUE, LOAD_TEST_ID, OFFICIAL_BATCH, TEAM_ID,
+    ZONE, ContestError, encode, require_phase, require_phase_available,
 )
 from .duels import EffectiveGame, FORMAL_GAMES, forfeit_result, formal_maps, insert_plan, save_result
 from .workbook import DUEL_HEADERS, GAME_HEADERS, RANK_HEADERS, WorkbookError, read_roster, write_workbook
@@ -16,6 +16,9 @@ from .workbook import DUEL_HEADERS, GAME_HEADERS, RANK_HEADERS, WorkbookError, r
 
 _GAME_STATES = ('pending', 'waiting_result', 'waiting_review', 'awaiting_action',
                 'unconfirmed', 'effective', 'waived')
+_BATCH_RULES = """COALESCE((
+    SELECT d.kind FROM duels d WHERE d.batch_id = b.batch_id ORDER BY d.id LIMIT 1
+), 'prelim')"""
 
 
 def _now():
@@ -23,7 +26,9 @@ def _now():
 
 
 def _batch(connection, batch_id=OFFICIAL_BATCH):
-    return connection.execute('SELECT * FROM prelim_batches WHERE batch_id = ?', (batch_id,)).fetchone()
+    return connection.execute(f'''
+        SELECT b.*, {_BATCH_RULES} AS rules FROM prelim_batches b WHERE b.batch_id = ?
+    ''', (batch_id,)).fetchone()
 
 
 def _planned_batch(connection):
@@ -67,15 +72,44 @@ def _read_teams(data):
     return teams
 
 
-def _plan_batch(connection, batch, pools):
+def _selected_teams(selection):
+    if selection.keys() not in ({'range'}, {'teams'}):
+        raise ContestError(400, 'INVALID_TEAM_SELECTION', '请选择编号范围或手动添加队伍')
+    by_range = 'range' in selection
+    teams = selection['range' if by_range else 'teams']
+    if (not isinstance(teams, list) or not teams
+            or any(not isinstance(team, str) or not TEAM_ID.fullmatch(team) for team in teams)):
+        raise ContestError(400, 'INVALID_TEAM_SELECTION', '队伍编号应为 team 加三位数字')
+    if by_range:
+        if len(teams) != 2 or teams[0] > teams[1]:
+            raise ContestError(400, 'INVALID_TEAM_SELECTION', '请填写有效的起始和结束编号，起始编号不能大于结束编号')
+        start, end = (int(team[4:]) for team in teams)
+        teams = [f'team{number:03d}' for number in range(start, end + 1)]
+    elif len(set(teams)) != len(teams):
+        raise ContestError(400, 'INVALID_TEAM_SELECTION', '队伍编号不能重复')
+    return [{'team_id': team, 'name': ''} for team in teams]
+
+
+def _team_ids(teams):
+    return {team['team_id'] for team in teams}
+
+
+def _save_official_roster(connection, teams):
+    connection.execute('''
+        INSERT INTO prelim_batches (batch_id, roster) VALUES (?, ?)
+        ON CONFLICT (batch_id) DO UPDATE SET roster = excluded.roster
+    ''', (OFFICIAL_BATCH, encode(teams)))
+
+
+def _plan_batch(connection, batch, pools, *, rules='prelim'):
     batch_id = batch['batch_id']
     prefix = 'prelim' if batch_id == OFFICIAL_BATCH else 'load'
     teams = [team['team_id'] for team in json.loads(batch['roster'])]
-    maps = formal_maps(pools, 'prelim') if len(teams) > 1 else ()
+    maps = formal_maps(pools, rules) if len(teams) > 1 else ()
     for a, b in combinations(teams, 2):
         sides = [a, b] if secrets.randbelow(2) == 0 else [b, a]
-        body = {'duel_id': f'duel-{prefix}-{uuid4().hex}', 'rules': 'prelim', 'sides': sides}
-        insert_plan(connection, 'prelim', body, maps, batch_id=batch_id)
+        body = {'duel_id': f'duel-{prefix}-{uuid4().hex}', 'rules': rules, 'sides': sides}
+        insert_plan(connection, rules, body, maps, batch_id=batch_id)
     connection.execute('UPDATE prelim_batches SET planned_at = ? WHERE batch_id = ?', (_now(), batch_id))
 
 
@@ -181,7 +215,8 @@ def _progress(connection, batch_id=OFFICIAL_BATCH):
         finished_at = last_settled if state == 'finished' else None
         elapsed = (datetime.fromisoformat(finished_at or stopped_at or _now())
                    - datetime.fromisoformat(planned_at)).total_seconds()
-        result.update(batch_id=batch_id, planned_at=planned_at, finished_at=finished_at, stopped_at=stopped_at,
+        result.update(batch_id=batch_id, rules=batch['rules'], planned_at=planned_at,
+                      finished_at=finished_at, stopped_at=stopped_at,
                       elapsed_seconds=round(max(0, elapsed), 3),
                       duels_per_minute=round(60 * duels['settled'] / elapsed, 2) if elapsed > 0 else 0)
     return result
@@ -251,20 +286,26 @@ class Preliminary:
                 if teams != json.loads(batch['roster']):
                     raise ContestError(409, 'ROSTER_FROZEN', '单循环已创建，参赛名单已冻结')
             else:
-                connection.execute('''
-                    INSERT INTO prelim_batches (batch_id, roster) VALUES (?, ?)
-                    ON CONFLICT (batch_id) DO UPDATE SET roster = excluded.roster
-                ''', (OFFICIAL_BATCH, encode(teams)))
+                _save_official_roster(connection, teams)
             return _progress(connection)
 
-    def plan(self):
+    def plan(self, selection=None):
+        teams = _selected_teams(selection) if selection is not None else None
         with self.database.transaction() as connection:
             batch = _batch(connection)
-            if batch is None:
-                raise ContestError(409, 'ROSTER_REQUIRED', '请先导入截止时的参赛名单')
-            if batch['planned_at'] is None:
-                require_phase(connection, self.phase, 'prelim')
-                _plan_batch(connection, batch, self.maps)
+            existing = json.loads(batch['roster']) if batch is not None else []
+            if batch is not None and batch['planned_at'] is not None:
+                if teams is not None and _team_ids(teams) != _team_ids(existing):
+                    raise ContestError(409, 'ROSTER_FROZEN', '单循环已创建，参赛名单已冻结')
+                return _progress(connection)
+            if batch is None and teams is None:
+                raise ContestError(409, 'ROSTER_REQUIRED', '请先配置参赛队伍')
+            require_phase(connection, self.phase, 'prelim')
+            if teams is not None:
+                by_id = {team['team_id']: team for team in existing}
+                _save_official_roster(connection, [by_id.get(team['team_id'], team) for team in teams])
+                batch = _batch(connection)
+            _plan_batch(connection, batch, self.maps)
             return _progress(connection)
 
     def progress(self):
@@ -279,20 +320,31 @@ class Preliminary:
             replacement = retry_attempt(connection, run_id, batch_id=batch_id)
             return dict(_progress(connection, batch_id), retry_run_id=replacement)
 
-    def start_load_test(self, batch_id, data):
+    def start_load_test(self, batch_id, data, *, rules=None):
         _validate_load_test_id(batch_id)
-        teams = _read_teams(data)
+        if rules is not None and rules not in BATTLE_RULES:
+            raise ContestError(400, 'INVALID_RULES', '请选择初赛或决赛规则')
+        stage = 'prelim' if rules is None else rules
+        from_selection = isinstance(data, dict)
+        teams = _selected_teams(data) if from_selection else _read_teams(data)
         if len(teams) < 2:
-            raise ContestError(400, 'INVALID_ROSTER', '压测名单至少需要两支队伍')
+            code = 'INVALID_TEAM_SELECTION' if from_selection else 'INVALID_ROSTER'
+            raise ContestError(400, code, '压测至少需要两支队伍')
         with self.database.transaction() as connection:
             batch = _batch(connection, batch_id)
             if batch is None:
-                require_phase(connection, self.phase, 'prelim', load_test=True)
+                if rules is None:
+                    require_phase(connection, self.phase, 'prelim', load_test=True)
+                else:
+                    require_phase_available(connection, stage, load_test=True)
                 connection.execute('INSERT INTO prelim_batches (batch_id, roster) VALUES (?, ?)',
                                    (batch_id, encode(teams)))
-                _plan_batch(connection, _batch(connection, batch_id), self.maps)
-            elif teams != json.loads(batch['roster']):
-                raise ContestError(409, 'LOAD_TEST_CONFLICT', '同一压测编号已有不同的队伍名单')
+                _plan_batch(connection, _batch(connection, batch_id), self.maps, rules=stage)
+            else:
+                existing = json.loads(batch['roster'])
+                same_teams = _team_ids(teams) == _team_ids(existing) if from_selection else teams == existing
+                if not same_teams or batch['rules'] != stage:
+                    raise ContestError(409, 'LOAD_TEST_CONFLICT', '批次编号已用于不同的队伍或规则')
             return _progress(connection, batch_id)
 
     def load_test_progress(self, batch_id):
@@ -317,9 +369,9 @@ class Preliminary:
 
     def load_tests(self):
         with self.database.transaction(write=False) as connection:
-            rows = connection.execute('''
-                SELECT batch_id, planned_at FROM prelim_batches
-                WHERE batch_id != ? ORDER BY planned_at DESC, batch_id
+            rows = connection.execute(f'''
+                SELECT b.batch_id, b.planned_at, {_BATCH_RULES} AS rules FROM prelim_batches b
+                WHERE b.batch_id != ? ORDER BY b.planned_at DESC, b.batch_id
             ''', (OFFICIAL_BATCH,))
             return {'batches': [dict(row) for row in rows]}
 

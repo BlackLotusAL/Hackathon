@@ -27,7 +27,7 @@ HTTP 报文与归档中的 JSON、JSONL 使用 UTF-8。错误响应是包含稳�
 | `run_id` | string | 必填，由 Contest 分配，匹配 `run-[0-9]+\.[1-9][0-9]*`。格式为 `run-<局号>.<尝试次数>`，局号在同一归档中唯一，尝试次数从 1 开始 |
 | `duel_id` | string | 必填，整场对决编号，匹配 `duel-[A-Za-z0-9_-]+`。同场各局和重跑使用同一编号 |
 | `rules` | string | 必填，取 `prelim`（初赛）或 `final`（决赛），用于匹配裁判镜像和 Bot 运行环境 |
-| `bots` | string[2] | 必填，两个不同的参赛方编号。队伍编号为 `team` 加三位数字，基准编号为 `bot001`、`bot002`、`bot003`。下标 0、1 对应该局的出生点 |
+| `bots` | string[2] | 必填，两项参赛方编号。队伍编号为 `team` 加三位数字，基准编号为 `bot001`、`bot002`、`bot003`。下标 0、1 对应该局的出生点。后台单场模拟允许两项为同一队伍编号，其他对决使用不同编号 |
 | `config` | object | 必填，原样交付给裁判的对局配置 |
 | `config.map` | object | 必填，按下表提供一种地图配置 |
 
@@ -36,7 +36,9 @@ HTTP 报文与归档中的 JSON、JSONL 使用 UTF-8。错误响应是包含稳�
 | 天梯生成地图 | `seed` 为 Contest 随机生成并随对决固定的 JSON 整数种子 |
 | 固定地图文件 | `file` 为地图文件的完整 UTF-8 文本字符串。`sha256` 为该文本的 SHA-256，以 64 位小写十六进制表示。固定地图池使用赛前已公布的哈希 |
 
-`seed` 和 `file` 互斥。天梯对决交付种子，初赛单循环、正式决赛和独立压测交付固定地图文件。正式决赛使用 `rules: "final"` 和决赛地图池的 `file`、`sha256`。裁判将外层 JSON 解码后的 `file` 编码为 UTF-8 并核验哈希，原有的空白和换行均参与计算。Arena 按收到的 `config` 和 `bots` 顺序执行单局，使用原 `run_id` 查询和归档。
+`seed` 和 `file` 互斥。天梯对决交付种子，初赛单循环、正式决赛和独立批次交付固定地图文件。决赛规则使用 `rules: "final"` 和决赛地图池的 `file`、`sha256`。裁判将外层 JSON 解码后的 `file` 编码为 UTF-8 并核验哈希，原有的空白和换行均参与计算。Arena 按收到的 `config` 和 `bots` 顺序执行单局，使用原 `run_id` 查询和归档。
+
+后台单场对决的 `duel_id` 以 `duel-manual-` 开头。初赛模拟使用天梯的种子与版本固定方式，决赛模拟使用正式决赛的地图池与版本固定方式。同队模拟使用同一个固定提交启动两个独立 Bot 服务实例，按出生点分别记录归档和胜方。
 
 ### 2.2 天梯提交示例
 
@@ -119,12 +121,12 @@ curl -i 'http://127.0.0.1:18080/arena/v1/runs/query' \
 
 | 场景 | 查询节奏 |
 | --- | --- |
-| 正式初赛、独立压测 | 每 10 秒一轮。查询已受理或提交未确认、尚未取得终态的当前尝试。每批最多 100 个编号，按批次顺序发送。例如同一轮有 103 个待查编号时，发出 100 条和 3 条两次请求。上一轮还未结束时跳过当前定时点，查询失败的尝试留到下一轮 |
+| 正式初赛、独立批次 | 每 10 秒一轮。查询已受理或提交未确认、尚未取得终态的当前尝试。每批最多 100 个编号，按批次顺序发送。例如同一轮有 103 个待查编号时，发出 100 条和 3 条两次请求。上一轮还未结束时跳过当前定时点，查询失败的尝试留到下一轮 |
 | 天梯对决、正式决赛 | 每次发送一个编号。返回 `queued` 或 `running` 后至少等待 0.5 秒再查询，失败时从 1 秒退避至最多 30 秒 |
 
 已确认受理的编号进入 `missing_run_ids` 时提示主办方核对。同批其他编号的有效状态仍可落库。
 
-主办方结束压测批次后，Contest 停止提交和查询该批次的单局，忽略在途响应。
+主办方结束独立批次后，Contest 停止提交和查询该批次的单局，忽略在途响应。
 
 ### 3.3 单局执行状态
 
@@ -191,10 +193,12 @@ curl -i 'http://127.0.0.1:18080/arena/v1/status'
 
 ## 5. 归档交付要求
 
-Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂载路径可以不同，指向同一份存储。Contest 的 `archive_root` 若为相对路径，以 Contest 安装目录为基准。项目位于 `/srv/hackathon` 时，归档根目录示例为 `/srv/hackathon/contest/var/archives/contest/`。
+Linux 宿主机使用 `/var/hackathon/archives` 作为持久化共享归档目录，与三个服务的安装目录及 Arena 临时任务目录分开。Arena 将归档发布到该目录，Contest 和 Portal 的 `archive_root` 指向同一目录。容器部署时挂载同一份存储，Arena 使用读写挂载，Contest 和 Portal 使用只读挂载。容器内挂载点若不同，各服务填写自身的绝对路径。
 
 ```text
 <archive_root>/
+├── .staging/
+│   └── <run_id>/          # Arena 发布前的单局输出
 ├── runs/
 │   └── <run_id>/
 │       ├── match.json       # 完成或构建失败的清单
@@ -209,6 +213,8 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 ```
 
 第 3.3 节列出的必需文件须先在最终路径可读，随后持久化并返回终态。可先在同一文件系统的 `.staging/<run_id>/` 写齐并核对单局文件，再将目录原子重命名为 `runs/<run_id>/`。构建日志按上图路径单独交付。最终归档和已有日志按完整执行编号永久保留。
+
+每套 Contest 数据库对应独立的归档根目录，联调和正式部署分别配置。现有部署切换归档目录时，先停止接收新对局并等在途任务结束，完整复制 `runs/` 和 `builds/` 后再切换三端配置。
 
 将实际产生的 Bot 标准输出和标准错误合并到对应的 `p0.stderr.log` 或 `p1.stderr.log`，每份最多 1 MB。构建日志按实际产生情况保留。日志文本使用 UTF-8。资源分配和隔离证据须能按完整 `run_id` 提供。
 
@@ -234,7 +240,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
   "duel_started_at": "2026-11-27T14:05:00+08:00",
   "result": {
     "run_id": "run-7001.2",
-    "engine_version": "exposure-field/3",
+    "version": "v1",
     "map": "R42",
     "map_sha256": "79c625cec70b0666fe29bb8ed8ebb9684c1042344848588c2980c2cfe5f20075",
     "winner": 0,
@@ -252,7 +258,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 | `bots` | 按请求的出生点顺序提供两项，每项包含与请求一致的 `team_id`。参赛队伍必填实际固定的 `commit`，基准 Bot 可省略 `commit`。`bots[].state` 仅用于构建失败清单 |
 | `duel_started_at` | 天梯对决必填，使用第 6.1 节保存的时间字符串，格式为带 `+08:00` 的 ISO 8601。初赛单循环、正式决赛和压测可省略 |
 | `result.run_id` | 必填字符串，取自裁判原始输出，须与本次完整 `run_id` 一致，含尝试后缀，例如 `run-7001.2` |
-| `result.engine_version` | 实际使用的引擎版本 |
+| `result.version` | 必填，裁判输出的 `v1` |
 | `result.map`、`result.map_sha256` | 实际地图编号及哈希。正式地图的哈希须与请求的 `config.map.sha256` 一致 |
 | `result.winner`、`result.reason` | 胜方出生点 `0` 或 `1`（未决胜时为 `null`）及裁判的单局终止原因。按当局的 `bots` 确定参赛方 |
 | `result.score`、`result.bonus`、`result.lead_turns`、`result.time_us` | 四项指标均按出生点排列。`time_us` 保留裁判核算的整数微秒，包含触发技术判负而未结算的回合 |
@@ -277,7 +283,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 
 ### 5.3 回放与裁判观测
 
-`replay.json` 的 `format` 为 `match-replay/2`。
+`replay.json` 的 `version` 为 `v1`，与 `match.json` 中的 `result.version` 一致。
 
 | 字段 | 含义 |
 | --- | --- |
@@ -285,7 +291,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 | `init` | 初始网格、束斑和得分 |
 | `frames` | 逐回合记录命令、束斑、得分、奖励、订单、道具、事件和格子变化。可选的 `frames[].ms` 供界面显示 |
 | `result` | 终局结果及已结算回合数 |
-| `engine_version`、`observations` | 所有已完成的单局必填，记录当前引擎版本和按原顺序排列的裁判观测 |
+| `observations` | 所有已完成的单局必填，按原顺序记录裁判观测 |
 
 `log.jsonl` 按观测顺序每行保存一个 JSON 对象，双方数组按出生点编号排列。
 
@@ -305,7 +311,7 @@ Arena 写入共享归档，Contest 和 Portal 以只读方式访问。三端挂�
 
 ### 6.1 固定参赛版本与开始时间
 
-天梯对决使用对决开始时各队仓库的 `main` 分支提交，基准 Bot 使用当期版本。初赛单循环和正式决赛使用该赛段提交截止、仓库锁定时记录的 `main` 分支最终提交。独立压测使用初赛规则与测试名单中队伍的已固定提交，`duel_id` 以 `duel-load-` 开头，`run_id` 继续由 Contest 在同一编号序列中分配。
+天梯对决使用对决开始时各队仓库的 `main` 分支提交，基准 Bot 使用当期版本。初赛单循环和正式决赛使用该赛段提交截止、仓库锁定时记录的 `main` 分支最终提交。独立批次使用所选规则与批次队伍的已固定提交，`duel_id` 以 `duel-load-` 开头，`run_id` 继续由 Contest 在同一编号序列中分配。
 
 首次构建前按 `duel_id` 持久保存参赛方编号与固定版本的对应关系。同场各局及重跑按参赛方编号取固定版本，再按该局 `bots` 的顺序分配到出生点。首次尝试未生成归档时，固定记录仍须保留。
 
@@ -325,7 +331,7 @@ Arena 按任务的 `rules` 提供 Python Bot 运行环境。决赛天梯和正�
 
 C++ 和 Java 的正式 Bot 镜像由 Arena 构建，运行平台为 Linux amd64。Bot 容器内设置 `BOT_HOST=0.0.0.0` 和 `BOT_PORT=8080`，供本局网络内的裁判调用。
 
-裁判镜像包含 `judge` 和 `engine`，运行平台为 Linux amd64，基础镜像使用 Python 3.9.11，当前引擎版本为 `exposure-field/3`。通过镜像仓库或离线包交付时注明适用赛段、标签、digest 和引擎版本。Arena 记录实际使用的镜像及 digest。在含 `contest/` 的源码根目录可构建联调用镜像。
+裁判镜像包含 `judge` 和 `engine`，运行平台为 Linux amd64，基础镜像使用 Python 3.9.11。通过镜像仓库或离线包交付时注明适用赛段、标签和 digest。Arena 记录实际使用的镜像及 digest。在含 `contest/` 的源码根目录可构建联调用镜像。
 
 ```sh
 docker build --platform linux/amd64 -f contest/judge/Dockerfile -t exposure-judge:local .
@@ -367,7 +373,7 @@ Bot HTTP 接口通过路径前缀 `/v1` 标明协议版本。裁判分别向两�
 ```sh
 docker run --rm --network arena-run-7001-2 \
   --mount type=bind,source=/srv/arena/tasks/run-7001.2,target=/task,readonly \
-  --mount type=bind,source=/srv/hackathon/contest/var/archives/contest/.staging/run-7001.2,target=/out \
+  --mount type=bind,source=/var/hackathon/archives/.staging/run-7001.2,target=/out \
   exposure-judge:local
 ```
 

@@ -1,5 +1,6 @@
 """Contest HTTP endpoints, organizer access and service lifecycle."""
 from base64 import b64encode
+from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address
 from pathlib import Path
@@ -8,7 +9,7 @@ import re
 import socket
 from threading import Event, Thread
 from time import monotonic
-from urllib.parse import quote, unquote
+from urllib.parse import parse_qs, quote, unquote
 
 from engine.protocol import RUN_ID, dumps, json_object
 from engine.verification import VerificationError
@@ -16,15 +17,18 @@ from engine.verification import VerificationError
 from .arena import RUN_QUERY_BATCH_SIZE, ArenaClient, ExecutionService, review_archive
 from .config import IPWhitelist
 from .database import Database, DatabaseStopping
-from .domain import ContestError
+from .domain import BATTLE_RULES, OFFICIAL_BATCH, ContestError
 from .duels import DuelService, Rulings, load_pools
 from .preliminary import Preliminary
+from .self_check import check_bot
 from .workbook import MAX_UPLOAD, MIME
 
 
 PRELIMINARY_POLL_INTERVAL = 10
 DUEL_QUERY = re.compile(r'/contest/v1/duels/([^/]+)/(status|result)')
 LOAD_TEST_RESOURCE = re.compile(r'/admin/load-tests/([^/]+)(?:/(retry|stop))?')
+MANUAL_DUEL_RESOURCE = re.compile(r'/admin/duels/([^/]+)(?:/(stop))?')
+REPLAY_RESOURCE = re.compile(r'/admin/runs/([^/]+)/replay')
 
 
 class Contest:
@@ -102,11 +106,16 @@ class ContestWorker:
 
 
 class Admin:
-    def __init__(self, contest, user, password, arena=None):
+    def __init__(self, contest, user, password, arena=None, *, archive_root=None):
         self.preliminary, self.rulings = contest.preliminary, contest.rulings
+        self.duels = contest.duels
         self.user, self.arena = user, arena
+        self.archive_root = archive_root
         self.credentials = b64encode(f'{user}:{password}'.encode('utf-8'))
-        self.page = Path(__file__).with_name('admin.html').read_bytes()
+        self.page = Path(__file__).with_name('admin.html').read_bytes().replace(
+            b'{{phase}}', escape(self.preliminary.phase).encode('utf-8'),
+        )
+        self.replay_script = Path(__file__).with_name('replay.js').read_bytes()
 
     @staticmethod
     def workbook(http, data, filename, fallback):
@@ -123,19 +132,29 @@ class Admin:
 
     def handle(self, http, method):
         self.authorize(http, method)
-        path = http.path.partition('?')[0]
+        path, _, query = http.path.partition('?')
         if method == 'GET':
-            self.get(http, path)
+            self.get(http, path, query)
         else:
             self.post(http, path)
 
-    def get(self, http, path):
+    def get(self, http, path, query):
         if path in ('/admin', '/admin/prelim', '/admin/prelim/'):
             return http.respond(200, self.page, 'text/html; charset=utf-8')
+        if path == '/admin/replay.js':
+            return http.respond(200, self.replay_script, 'text/javascript; charset=utf-8')
+        if path == '/admin/replays':
+            params = parse_qs(query)
+            batch = params.get('batch', [OFFICIAL_BATCH])[0]
+            page = params.get('page', ['0'])[0]
+            if not re.fullmatch(r'[0-9]{1,6}', page):
+                raise ContestError(400, 'INVALID_PAGE', '回放页码无效')
+            return http.reply(200, self.duels.batch_replays(batch, int(page)))
         queries = {
             '/admin/prelim/progress': self.preliminary.progress,
             '/admin/prelim/standings': self.preliminary.standings,
             '/admin/load-tests': self.preliminary.load_tests,
+            '/admin/duels': self.duels.manual_duels,
             '/admin/rulings': self.rulings.pending,
         }
         if path in queries:
@@ -143,6 +162,12 @@ class Admin:
         load_test = LOAD_TEST_RESOURCE.fullmatch(path)
         if load_test and load_test[2] is None:
             return http.reply(200, self.preliminary.load_test_progress(unquote(load_test[1])))
+        manual_duel = MANUAL_DUEL_RESOURCE.fullmatch(path)
+        if manual_duel and manual_duel[2] is None:
+            return http.reply(200, self.duels.show(unquote(manual_duel[1]), manual=True))
+        replay = REPLAY_RESOURCE.fullmatch(path)
+        if replay:
+            return self.replay(http, unquote(replay[1]))
         if path == '/admin/prelim/results.xlsx':
             return self.workbook(http, self.preliminary.export_results(), '初赛结果.xlsx', 'prelim-results.xlsx')
         if path == '/admin/arena/status':
@@ -152,13 +177,27 @@ class Admin:
             return http.reply(200, status)
         raise ContestError(404, 'NOT_FOUND', '接口不存在')
 
+    def replay(self, http, run_id):
+        self.duels.require_replay(run_id)
+        try:
+            if self.archive_root is None:
+                raise FileNotFoundError()
+            path = self.archive_root.resolve() / 'runs' / run_id / 'replay.json'
+            if path.resolve(strict=True) != path or not path.is_file():
+                raise FileNotFoundError()
+            data = path.read_bytes()
+        except (OSError, RuntimeError) as error:
+            raise ContestError(404, 'REPLAY_NOT_FOUND', '该局暂无可播放的回放') from error
+        return http.respond(200, data, 'application/json; charset=utf-8')
+
     def post(self, http, path):
-        commands = {
-            '/admin/prelim/plan': self.preliminary.plan,
-            '/admin/prelim/confirm': self.preliminary.confirm,
-        }
-        if path in commands:
-            return http.reply(200, commands[path]())
+        if path == '/admin/prelim/plan':
+            selection = None
+            if http.headers.get('Content-Length', '0') != '0':
+                selection = http.read_json('INVALID_TEAM_SELECTION', '请配置参赛队伍')
+            return http.reply(200, self.preliminary.plan(selection))
+        if path == '/admin/prelim/confirm':
+            return http.reply(200, self.preliminary.confirm())
         if path == '/admin/prelim/roster':
             data = http.read_body(MAX_UPLOAD, 'INVALID_ROSTER', '请选择 XLSX 队伍名单')
             return http.reply(200, self.preliminary.import_roster(data))
@@ -167,6 +206,15 @@ class Admin:
         if path == '/admin/prelim/withdraw':
             body = http.read_json('INVALID_WITHDRAWAL', '请选择退赛队伍')
             return http.reply(200, self.preliminary.withdraw(body.get('teams')))
+        if path == '/admin/duels':
+            body = http.read_json('INVALID_DUEL', '请选择规则并填写双方队伍编号')
+            return http.reply(202, self.duels.accept_manual(body))
+        if path == '/admin/check':
+            body = http.read_json('INVALID_CHECK', '请选择规则并填写 Bot 地址')
+            return http.reply(200, check_bot(body))
+        manual_duel = MANUAL_DUEL_RESOURCE.fullmatch(path)
+        if manual_duel and manual_duel[2] == 'stop':
+            return http.reply(200, self.duels.stop_manual(unquote(manual_duel[1])))
         if path == '/admin/rulings':
             body = http.read_json('INVALID_RULING', '请填写裁定范围、编号、胜方和理由')
             ruling = self.rulings.record(body.get('scope'), body.get('target'), body.get('winner'),
@@ -179,8 +227,16 @@ class Admin:
                 return self.retry(http, load_test_id=batch_id)
             if load_test[2] == 'stop':
                 return http.reply(200, self.preliminary.stop_load_test(batch_id))
-            data = http.read_body(MAX_UPLOAD, 'INVALID_ROSTER', '请选择 XLSX 压测名单')
-            return http.reply(200, self.preliminary.start_load_test(batch_id, data))
+            rules = None
+            if http.headers.get_content_type() == 'application/json':
+                data = http.read_json('INVALID_TEAM_SELECTION', '请配置压测队伍')
+                if 'rules' in data:
+                    rules = data.pop('rules')
+                    if rules not in BATTLE_RULES:
+                        raise ContestError(400, 'INVALID_RULES', '请选择初赛或决赛规则')
+            else:
+                data = http.read_body(MAX_UPLOAD, 'INVALID_ROSTER', '请选择 XLSX 压测名单')
+            return http.reply(200, self.preliminary.start_load_test(batch_id, data, rules=rules))
         raise ContestError(404, 'NOT_FOUND', '接口不存在')
 
     def retry(self, http, *, load_test_id=None):
@@ -280,7 +336,7 @@ def serve(settings):
     settings.db.parent.mkdir(parents=True, exist_ok=True)
     stop = Event()
     contest = Contest(settings.db, pools, phase=settings.phase, shutdown=stop)
-    admin = (Admin(contest, settings.admin_user, settings.admin_password, arena)
+    admin = (Admin(contest, settings.admin_user, settings.admin_password, arena, archive_root=settings.archive_root)
              if settings.admin_user else None)
     worker = ContestWorker(contest, settings.archive_root, arena)
 

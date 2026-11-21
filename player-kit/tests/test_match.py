@@ -4,8 +4,10 @@ from tempfile import TemporaryDirectory
 import unittest
 from unittest.mock import call, patch
 
+from engine import VERSION
 from engine.maps import generate
 from engine.match import play_match
+from engine.replay import write_replay_index
 from engine.rules import PARAMS
 
 
@@ -57,7 +59,8 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(game.metrics()['score'], [9, 9])
         self.assertEqual(game.time_us, [600600, 602400])
         self.assertEqual((game.winner, game.reason, errors), (0, 'time', [0, 0]))
-        self.assertEqual(replay['format'], 'match-replay/2')
+        self.assertEqual((replay['version'], replay['source']), (VERSION, 'practice'))
+        self.assertFalse({'format', 'engine_version'} & replay.keys())
         self.assertEqual(replay['players'], ['submission', 'bot002'])
         self.assertEqual(len(replay['frames']), 600)
         self.assertEqual(replay['result']['time_us'], game.time_us)
@@ -88,3 +91,13 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(replay['observations'][-2]['us'], [PARAMS['turn_ms'] * 1000, 1003])
         self.assertEqual(replay['observations'][-1], {'phase': 'end', 'reason': 'errors'})
         self.assertTrue(all(bot.closed for bot in bots))
+
+    def test_replay_index_only_lists_current_version(self):
+        with TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for filename, data in (('current.json', {'version': VERSION}),
+                                   ('unknown.json', {'version': 'v2'}), ('unversioned.json', {})):
+                (directory / filename).write_text(json.dumps(data), encoding='utf-8')
+            write_replay_index(directory)
+            listing = (directory / 'index.js').read_text(encoding='utf-8').partition(' = ')[2]
+            self.assertEqual([name for name, _ in json.loads(listing.rstrip(';\n'))], ['current.json'])

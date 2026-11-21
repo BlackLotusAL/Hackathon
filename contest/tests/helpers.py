@@ -32,6 +32,8 @@ from service.workbook import MIME, ROSTER_HEADERS, SHEET_XML, write_workbook
 
 CONTEST = Path(__file__).resolve().parents[1]
 TEAMS = ['team001', 'team002']
+TEST_ADMIN_USER = 'organizer'
+TEST_ADMIN_PASSWORD = 'contest-local'
 
 
 def plan_duel(contest, duel_id, kind, sides=TEAMS):
@@ -60,11 +62,7 @@ def run_module(package, *arguments, expected=0):
 
 
 def write_config(path, **overrides):
-    source = CONTEST / 'config/contest.example.json'
-    values = json.loads(source.read_text(encoding='utf-8'))
-    if values.get('maps') is not None:
-        values['maps'] = str(source.parent / values['maps'])
-    values.update(overrides)
+    values = {'admin_user': TEST_ADMIN_USER, 'admin_password': TEST_ADMIN_PASSWORD, **overrides}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(dumps(values), encoding='utf-8')
     return path
@@ -102,8 +100,8 @@ def running_service(config, *arguments):
 
 
 def case(identifier, description):
-    """Attach a stable priority and case ID without wrapping the test method."""
-    if not re.fullmatch(r'L[012]-[0-9]{3}', identifier):
+    """Attach a stable L0 case ID without wrapping the test method."""
+    if not re.fullmatch(r'L0-[0-9]{3}', identifier):
         raise ValueError(f'Invalid test case ID: {identifier}')
 
     def annotate(method):
@@ -315,7 +313,7 @@ class ArenaStub:
         return self.summary
 
 
-def admin_headers(user='organizer', password='contest-local'):
+def admin_headers(user=TEST_ADMIN_USER, password=TEST_ADMIN_PASSWORD):
     credentials = b64encode(f'{user}:{password}'.encode('utf-8')).decode('ascii')
     return {'Authorization': 'Basic ' + credentials, 'X-Contest-Admin': '1'}
 
@@ -399,7 +397,7 @@ def arena_archive(output, bots, *, state='finished', duel_started_at=None):
     manifest = {'bots': bots}
     if state == 'finished':
         result = json_object((output / 'result.json').read_bytes())
-        fields = ('run_id', 'engine_version', 'map', 'map_sha256', 'winner', 'reason',
+        fields = ('run_id', 'version', 'map', 'map_sha256', 'winner', 'reason',
                   'score', 'bonus', 'lead_turns', 'time_us')
         manifest['result'] = {key: result[key] for key in fields}
     if duel_started_at is not None:
@@ -443,8 +441,8 @@ class MatchFixture(WorkspaceFixture):
         return output, manifest, replay
 
 
-def roster_workbook(rows, headers=ROSTER_HEADERS):
-    return write_workbook((('队伍', headers, rows, len(rows)),))
+def roster_workbook(rows):
+    return write_workbook((('队伍', ROSTER_HEADERS, rows, len(rows)),))
 
 
 def exported_tables(data):

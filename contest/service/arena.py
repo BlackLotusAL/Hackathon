@@ -6,7 +6,7 @@ from time import time
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
-from engine.core import ENGINE_VERSION
+from engine import VERSION
 from engine.mapgen import load_map
 from engine.protocol import RUN_ID, dumps, json_object
 from engine.replay import game_result
@@ -114,6 +114,7 @@ _OPEN_RUNS = '''
 _POLLABLE_RUNS = _OPEN_RUNS + '''
     AND r.submission IN ('accepted', 'unconfirmed') AND r.arena_result IS NULL AND r.review IS NULL
 '''
+_BATCH_POLL = "(d.batch_id IS NOT NULL OR d.kind = 'prelim')"
 
 
 class PollClaim(NamedTuple):
@@ -148,7 +149,7 @@ def _poll_values(run, status, results, now):
         elif status is not None and 400 <= status < 500 and status not in (408, 429):
             issue = f'Arena 执行查询失败（HTTP {status}）'
 
-    if run['kind'] == 'prelim':
+    if run['batch_poll']:
         poll_after, failures = 0, 0
     else:
         delay = min(30, 2 ** (failures - 1)) if failures else POLL_INTERVAL
@@ -241,17 +242,17 @@ class ExecutionService:
         with self.database.transaction() as connection:
             run = connection.execute(f'''
                 SELECT r.run_id {_POLLABLE_RUNS}
-                AND d.kind != 'prelim' AND r.poll_after <= ?
+                AND NOT {_BATCH_POLL} AND r.poll_after <= ?
                 ORDER BY r.poll_after, d.id, g.ordinal LIMIT 1
             ''', (now,)).fetchone()
             if run is not None:
                 return _reserve_polls(connection, (run,), now)[0]
 
     def preliminary_poll_targets(self):
-        """Snapshot the eligible executions at the start of a preliminary round."""
+        """Snapshot the eligible executions at the start of a batch polling round."""
         with self.database.transaction(write=False) as connection:
             rows = connection.execute(f'''
-                SELECT r.run_id {_POLLABLE_RUNS} AND d.kind = 'prelim'
+                SELECT r.run_id {_POLLABLE_RUNS} AND {_BATCH_POLL}
                 ORDER BY d.id, g.ordinal
             ''')
             return [row['run_id'] for row in rows]
@@ -261,7 +262,7 @@ class ExecutionService:
         placeholders = ', '.join('?' for _ in run_ids)
         with self.database.transaction() as connection:
             rows = connection.execute(f'''
-                SELECT r.run_id {_POLLABLE_RUNS} AND d.kind = 'prelim'
+                SELECT r.run_id {_POLLABLE_RUNS} AND {_BATCH_POLL}
                 AND r.poll_after <= ? AND r.run_id IN ({placeholders})
                 ORDER BY d.id, g.ordinal
             ''', (now, *run_ids)).fetchall()
@@ -274,7 +275,8 @@ class ExecutionService:
         placeholders = ', '.join('?' for _ in expires)
         with self.database.transaction() as connection:
             rows = connection.execute(f'''
-                SELECT r.run_id, r.submission, r.poll_after, r.poll_failures, r.issue, d.kind {_POLLABLE_RUNS}
+                SELECT r.run_id, r.submission, r.poll_after, r.poll_failures, r.issue,
+                       {_BATCH_POLL} AS batch_poll {_POLLABLE_RUNS}
                 AND r.run_id IN ({placeholders})
             ''', tuple(expires)).fetchall()
             # Apply responses only to attempts still reserved by this query.
@@ -303,7 +305,9 @@ class ExecutionService:
             if duel is None:
                 return
             if manifest is not None:
-                if review == 'effective' and manifest['result']['winner'] is None:
+                first, second = manifest['bots']
+                same_team = first['team_id'] == second['team_id']
+                if review == 'effective' and manifest['result']['winner'] is None and not same_team:
                     review, issue = 'awaiting_ruling', GAME_TIE_ISSUE
                 commits = encode({bot['team_id']: bot['commit'] for bot in manifest['bots'] if 'commit' in bot})
                 started = manifest.get('duel_started_at') if duel['kind'].endswith('-ladder') else None
@@ -368,6 +372,8 @@ def review_archive(root, request, state, *, ladder):
             if bot['team_id'] not in BASELINES or 'commit' in bot:
                 if not isinstance(commit, str) or not commit:
                     raise VerificationError('归档缺少有效提交号')
+        if bots[0]['team_id'] == bots[1]['team_id'] and bots[0].get('commit') != bots[1].get('commit'):
+            raise VerificationError('同队对决两侧的提交版本不一致')
         if ladder:
             started = manifest['duel_started_at']
             if not started.endswith('+08:00') or datetime.fromisoformat(started).utcoffset() != ZONE.utcoffset(None):
@@ -385,9 +391,9 @@ def review_archive(root, request, state, *, ladder):
         result = manifest.get('result')
         if not isinstance(result, dict) or result.get('run_id') != run_id:
             raise VerificationError(f'match.json 的 result.run_id 缺失或与完整执行编号 {run_id} 不一致')
-        version = result['engine_version']
-        if version != ENGINE_VERSION:
-            raise VerificationError(f'无可用的同版引擎 {version}')
+        version = result.get('version')
+        if version != VERSION:
+            raise VerificationError(f'单局清单的版本不受支持（{version!r}）')
         board, digest = load_map(request['config']['map'], request['rules'])
         check_fields(result, {'map': board['id'], 'map_sha256': digest}, 'match.json')
         replay = json_object((path / 'replay.json').read_bytes())

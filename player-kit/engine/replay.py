@@ -5,11 +5,9 @@ from pathlib import Path
 from stat import S_ISREG
 from tempfile import NamedTemporaryFile
 
+from . import VERSION
 from .protocol import board_status, dumps, grid_rows, json_object
 from .rules import PARAMS
-
-
-FORMAT = 'match-replay/2'
 
 
 def _write_text(path, text):
@@ -51,7 +49,7 @@ def write_replay_index(directory):
                 replay = json_object(raw)
             except (OSError, ValueError, RecursionError):
                 continue
-            if replay.get('format') == FORMAT:
+            if replay.get('version') == VERSION:
                 encoded = b64encode(compress(raw, mtime=0)).decode('ascii')
                 entries.append('  ' + dumps([path.name, encoded]))
 
@@ -74,8 +72,8 @@ class Recorder:
         self.previous = _cells(game)
         owner, contour = self.previous
         self.data = {
-            'format': FORMAT,
-            'engine_version': 'player-kit/1',
+            'version': VERSION,
+            'source': 'practice',
             'map': game.map,
             'stage': game.stage,
             'players': [Path(submission).name, Path(opponent).name],
