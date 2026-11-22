@@ -9,17 +9,20 @@ cd contest
 python3.9 -m venv .venv
 ```
 
-按实际环境编辑 [config/contest.json](config/contest.json)。以下配置可用于本机预览。
+按实际环境编辑 [config/contest.json](config/contest.json)。
 
 ```json
 {
   "db": "../var/contest.sqlite",
   "archive_root": "/var/hackathon/archives",
-  "arena_url": "http://127.0.0.1:18080",
+  "maps": "maps.json",
+  "phase": "prelim-ladder",
+  "host": "0.0.0.0",
+  "port": 8082,
+  "ip_whitelist": null,
+  "arena_url": "http://127.0.0.1:28080",
   "admin_user": "organizer",
-  "admin_password": "contest",
-  "host": "127.0.0.1",
-  "maps": null
+  "admin_password": "contest"
 }
 ```
 

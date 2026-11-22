@@ -163,6 +163,31 @@ def _request(row):
             'bots': json.loads(row['bots']), 'config': {'map': json.loads(row['map'])}}
 
 
+def _submission_candidates(connection, limit):
+    active = connection.execute(f'''
+        SELECT {DUEL_PHASE} AS phase {_OPEN_RUNS}
+        AND r.submission IN ('sending', 'accepted', 'unconfirmed', 'resend') AND r.review IS NULL
+        ORDER BY d.id LIMIT 1
+    ''').fetchone()
+    if active is None:
+        active = connection.execute(f'''
+            SELECT {DUEL_PHASE} AS phase FROM duels d
+            WHERE d.closed_at IS NULL ORDER BY d.id LIMIT 1
+        ''').fetchone()
+    if active is None:
+        return []
+    return connection.execute(f'''
+        SELECT r.run_id, d.submission AS duel_submission, g.bots, g.map {_OPEN_RUNS}
+        AND r.submission IN ('pending', 'resend') AND r.arena_result IS NULL AND r.review IS NULL
+        AND ({DUEL_PHASE}) = ?
+        AND NOT EXISTS (
+            SELECT 1 FROM games earlier JOIN current_runs previous ON previous.game = earlier.id
+            WHERE earlier.duel = d.id AND earlier.ordinal < g.ordinal AND previous.review IS NOT 'effective'
+        )
+        ORDER BY d.id, g.ordinal LIMIT ?
+    ''', (active['phase'], limit)).fetchall()
+
+
 def _open_attempt(connection, run_id):
     run = connection.execute(
         f'SELECT r.*, g.duel, d.batch_id {_OPEN_RUNS} AND r.run_id = ?', (run_id,),
@@ -187,32 +212,19 @@ class ExecutionService:
         self.database = database
 
     def claim(self):
+        requests = self.claim_submissions(1)
+        return requests[0] if requests else None
+
+    def has_ready_submissions(self):
+        with self.database.transaction(write=False) as connection:
+            return bool(_submission_candidates(connection, 1))
+
+    def claim_submissions(self, limit):
         with self.database.transaction() as connection:
-            active = connection.execute(f'''
-                SELECT {DUEL_PHASE} AS phase {_OPEN_RUNS}
-                AND r.submission IN ('sending', 'accepted', 'unconfirmed', 'resend') AND r.review IS NULL
-                ORDER BY d.id LIMIT 1
-            ''').fetchone()
-            if active is None:
-                active = connection.execute(f'''
-                    SELECT {DUEL_PHASE} AS phase FROM duels d
-                    WHERE d.closed_at IS NULL ORDER BY d.id LIMIT 1
-                ''').fetchone()
-            if active is None:
-                return
-            row = connection.execute(f'''
-                SELECT r.run_id, d.submission AS duel_submission, g.bots, g.map {_OPEN_RUNS}
-                AND r.submission IN ('pending', 'resend') AND r.arena_result IS NULL AND r.review IS NULL
-                AND ({DUEL_PHASE}) = ?
-                AND NOT EXISTS (
-                    SELECT 1 FROM games earlier JOIN current_runs previous ON previous.game = earlier.id
-                    WHERE earlier.duel = d.id AND earlier.ordinal < g.ordinal AND previous.review IS NOT 'effective'
-                )
-                ORDER BY d.id, g.ordinal LIMIT 1
-            ''', (active['phase'],)).fetchone()
-            if row is not None:
-                connection.execute("UPDATE runs SET submission = 'sending' WHERE run_id = ?", (row['run_id'],))
-                return _request(row)
+            rows = _submission_candidates(connection, limit)
+            connection.executemany("UPDATE runs SET submission = 'sending' WHERE run_id = ?",
+                                   ((row['run_id'],) for row in rows))
+            return [_request(row) for row in rows]
 
     def complete_submission(self, run_id, status):
         issue = None

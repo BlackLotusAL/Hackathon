@@ -1,5 +1,6 @@
 """Contest HTTP endpoints, organizer access and service lifecycle."""
 from base64 import b64encode
+from concurrent.futures import ThreadPoolExecutor
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address
@@ -25,6 +26,8 @@ from .workbook import MAX_UPLOAD, MIME
 
 
 PRELIMINARY_POLL_INTERVAL = 10
+ARENA_SUBMIT_WORKERS = 12
+WORK_IDLE_INTERVAL = 0.25
 DUEL_QUERY = re.compile(r'/contest/v1/duels/([^/]+)/(status|result)')
 LOAD_TEST_RESOURCE = re.compile(r'/admin/load-tests/([^/]+)(?:/(retry|stop))?')
 MANUAL_DUEL_RESOURCE = re.compile(r'/admin/duels/([^/]+)(?:/(stop))?')
@@ -50,11 +53,43 @@ class ContestWorker:
 
     def submit_next(self):
         request = self.contest.runs.claim()
-        if request:
-            status = self.arena.submit(request)
-            self.contest.runs.complete_submission(request['run_id'], status)
-            return True
-        return False
+        if request is None:
+            return False
+        self._submit(request)
+        return True
+
+    def _submit(self, request):
+        status = self.arena.submit(request)
+        self.contest.runs.complete_submission(request['run_id'], status)
+
+    def _submission_capacity(self):
+        status = self.arena.status() or {}
+        slots = status.get('slots')
+        idle = slots.get('idle') if isinstance(slots, dict) else None
+        if type(idle) is not int or idle < 0:
+            return 1  # Keep dispatching serially when slot status is unavailable.
+        queued = status.get('queue', 0)
+        if type(queued) is not int or queued < 0:
+            return min(1, idle)
+        return min(ARENA_SUBMIT_WORKERS, max(0, idle - queued))
+
+    def submit_available(self, stop):
+        runs = self.contest.runs
+        submitting = set()
+        with ThreadPoolExecutor(max_workers=ARENA_SUBMIT_WORKERS, thread_name_prefix='arena-submit') as executor:
+            while not stop.is_set():
+                completed = {future for future in submitting if future.done()}
+                for future in completed:
+                    future.result()
+                submitting.difference_update(completed)
+
+                if len(submitting) < ARENA_SUBMIT_WORKERS and runs.has_ready_submissions():
+                    # In-flight submissions may not be counted in Arena's snapshot yet.
+                    limit = self._submission_capacity() - len(submitting)
+                    if limit > 0 and not stop.is_set():
+                        submitting.update(executor.submit(self._submit, request)
+                                          for request in runs.claim_submissions(limit))
+                stop.wait(WORK_IDLE_INTERVAL)
 
     def poll_next(self):
         claim = self.contest.runs.claim_poll()
@@ -343,7 +378,7 @@ def serve(settings):
     def work(step):
         while not stop.is_set():
             if not step():
-                stop.wait(0.25)
+                stop.wait(WORK_IDLE_INTERVAL)
 
     def run_worker(task, *args):
         try:
@@ -363,10 +398,10 @@ def serve(settings):
         listen_host = f'[{bind_ip}]' if bind_ip.version == 6 else str(bind_ip)
         print(f'Listening http://{listen_host}:{server.server_port}', flush=True)
         print(f'Arena {settings.arena_url}', flush=True)
-        steps = (worker.submit_next, worker.poll_next, worker.review_next)
+        steps = (worker.poll_next, worker.review_next)
         workers = [Thread(target=run_worker, args=(work, step), daemon=True, name=step.__name__) for step in steps]
-        workers.append(Thread(target=run_worker, args=(worker.poll_preliminary, stop),
-                              daemon=True, name='poll_preliminary'))
+        workers.extend(Thread(target=run_worker, args=(task, stop), daemon=True, name=task.__name__)
+                       for task in (worker.submit_available, worker.poll_preliminary))
         for thread in workers:
             thread.start()
         try:

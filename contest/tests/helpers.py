@@ -3,7 +3,7 @@ from base64 import b64encode
 from contextlib import ExitStack, closing, contextmanager, nullcontext
 import hashlib
 from http.client import HTTPConnection
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from io import BytesIO
 import json
 import os
@@ -154,8 +154,8 @@ class _JsonHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def _http_server(handler):
-    server = HTTPServer(('127.0.0.1', 0), handler)
+def _http_server(handler, *, server_type=HTTPServer):
+    server = server_type(('127.0.0.1', 0), handler)
     thread = Thread(target=server.serve_forever, kwargs={'poll_interval': 0.01}, daemon=True)
     thread.start()
     try:
@@ -267,7 +267,7 @@ def http_arena(status):
             else:
                 self.reply(404)
 
-    with _http_server(Handler) as server:
+    with _http_server(Handler, server_type=ThreadingHTTPServer) as server:
         yield f'http://127.0.0.1:{server.server_port}', requests, arena
 
 
