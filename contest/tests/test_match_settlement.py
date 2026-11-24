@@ -232,13 +232,7 @@ class MatchSettlementTests(MatchFixture):
         held = contest.duels.show(duel_id)['attempts'][1]
         self.assertEqual((held['run_id'], held['review']), (replacement, 'held'))
         self.assertIn('result.run_id', held['issue'])
-        self.assertFalse(worker.submit_next())
         self.assertIsNone(contest.duels.result(duel_id)['result'])
-
-        evidence.write_text(dumps(manifest), encoding='utf-8')
-        contest.runs.recheck(replacement)
-        self.assertTrue(worker.review_next())
-        self.assertEqual(contest.duels.show(duel_id)['attempts'][1]['review'], 'effective')
 
         self.assertTrue(worker.submit_next())
         second = arena.submitted[-1]
@@ -247,6 +241,12 @@ class MatchSettlementTests(MatchFixture):
         bots = [dict(bot, state='failed') for bot in self.metadata(second)]
         arena_archive(directory, bots, state='build_failed', duel_started_at=STARTED)
         self.poll_and_review(arena, worker, second['run_id'], 'build_failed')
+        self.assertIsNone(contest.duels.result(duel_id)['result'])
+
+        evidence.write_text(dumps(manifest), encoding='utf-8')
+        contest.runs.recheck(replacement)
+        self.assertTrue(worker.review_next())
+        self.assertEqual(contest.duels.show(duel_id)['attempts'][1]['review'], 'effective')
         self.assertFalse(worker.submit_next())
         client = HttpClient(contest_handler(contest))
         result = client.json(f'{DUELS_PATH}/{duel_id}/result')['result']

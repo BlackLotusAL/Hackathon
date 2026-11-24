@@ -113,6 +113,10 @@ class PrelimAdminTests(PrelimFixture):
         self.assertEqual(self.manager.json('load-tests')['batches'][0]['rules'], 'final')
         request = self.next_run()
         self.assertEqual((request['rules'], request['config']['map']), ('final', self.maps['final'][0]))
+        self.build_both_failed(self.next_run())
+        self.assertEqual(self.manager.json(path)['state'], 'running')
+        self.assertFalse(self.worker.submit_next())
+
         self.assertIsNone(self.contest.runs.claim_poll())
         _, _, replay = self.judge_archive(request, [Bot('U'), Bot('D', exit_after_reply=True)])
         self.poll_result(request['run_id'], 'finished')
@@ -125,7 +129,6 @@ class PrelimAdminTests(PrelimFixture):
         self.assertEqual(self.manager.json('replays?batch=load-final&page=1')['runs'], [])
         self.assertEqual(self.manager.json('replays?batch=official')['runs'], [])
         self.assertEqual(self.manager.json(f"runs/{request['run_id']}/replay"), replay)
-        self.build_both_failed(self.next_run())
         self.assertEqual(self.manager.json(path)['state'], 'finished')
         self.assertEqual(self.client.request(f"/contest/v1/duels/{request['duel_id']}/result")[0], 404)
         cutoff = '1970-01-01T00:00:00+08:00'
@@ -135,9 +138,9 @@ class PrelimAdminTests(PrelimFixture):
     def test_rulings_complete_the_official_batch_without_changing_evidence(self):
         self.admin.json('roster', roster_workbook(ROSTER[:2]), method='POST')
         self.admin.json('plan', method='POST')
+        requests = [self.next_run() for _ in range(6)]
         games = []
-        for ordinal in range(1, 7):
-            request = self.next_run()
+        for ordinal, request in enumerate(requests, 1):
             output, _, _ = self.judge_archive(request)
             evidence = [(output / name).read_bytes() for name in ('match.json', 'replay.json')]
             run_id = request['run_id']
@@ -256,7 +259,9 @@ class PrelimAdminTests(PrelimFixture):
         with self.assertRaises(ContestError) as error:
             reopened.duels.accept(sides)
         self.assertEqual(error.exception.code, 'PHASE_BUSY')
-        self.assertIsNone(reopened.runs.claim())
+        sibling = reopened.runs.claim()
+        self.assertEqual(sibling['duel_id'], refused['duel_id'])
+        self.assertNotEqual(sibling['run_id'], refused['run_id'])
         self.assertEqual(self.manager.json(rejected + '/stop', method='POST')['state'], 'stopped')
 
         batch = 'load-tests/load-with-results'

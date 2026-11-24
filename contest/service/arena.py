@@ -182,9 +182,9 @@ def _submission_candidates(connection, limit):
         AND ({DUEL_PHASE}) = ?
         AND NOT EXISTS (
             SELECT 1 FROM games earlier JOIN current_runs previous ON previous.game = earlier.id
-            WHERE earlier.duel = d.id AND earlier.ordinal < g.ordinal AND previous.review IS NOT 'effective'
+            WHERE earlier.duel = d.id AND earlier.ordinal < g.ordinal AND previous.review = 'build_failed'
         )
-        ORDER BY d.id, g.ordinal LIMIT ?
+        ORDER BY g.ordinal, d.id LIMIT ?
     ''', (active['phase'], limit)).fetchall()
 
 

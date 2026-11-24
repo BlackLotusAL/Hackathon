@@ -37,6 +37,9 @@ class ServiceWorkflowTests(WorkspaceFixture):
         # A second phase may already be queued in databases from earlier versions.
         plan_duel(prelim, 'duel-legacy-prelim', 'prelim')
         self.assertEqual(prelim.duels.status(duel_id)['state'], 'in_progress')
+        sibling = prelim.runs.claim()
+        self.assertEqual(sibling['duel_id'], duel_id)
+        self.assertNotEqual(sibling['run_id'], original['run_id'])
         self.assertIsNone(prelim.runs.claim())
         replacement = prelim.runs.retry(original['run_id'])
         self.assertEqual(prelim.runs.claim(), dict(original, run_id=replacement))

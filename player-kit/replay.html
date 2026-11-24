@@ -6,111 +6,100 @@
 <title>曝光领地 · 本地回放</title>
 <style>
 :root {
-  color-scheme: light;
-  --page: #f1f2ee;
-  --sheet: #fff;
-  --ink: #171a1d;
-  --muted: #565e65;
-  --line: #ced2cc;
-  --accent: #f2c224;
-  --cell: #e4e7e1;
-  --defect: #33383d;
-  --key: #91600a;
-  --blue: #244fc1;
-  --blue-field: #adc1f2;
-  --red: #b93328;
-  --red-field: #efb3a9;
-  --order: #13734c;
-  --boost: #7839b4;
-  --mono: "IBM Plex Mono", Consolas, monospace;
+  color-scheme: light dark;
+  --bg: #f2f3f0;
+  --surface: #fff;
+  --ink: #15171a;
+  --muted: #5d636b;
+  --line: #d5d8d3;
+  --accent: #f2c200;
+  --blue: #2459e0;
+  --red: #d6402f;
+  --error: #b4232c;
+  --body: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121416;
+    --surface: #1b1e21;
+    --ink: #eceeea;
+    --muted: #a0a6ad;
+    --line: #33383d;
+    --blue: #5b8cff;
+    --red: #ff6b5a;
+    --error: #ff7a7f;
+  }
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
-body {
-  margin: 0;
-  background: var(--page);
-  color: var(--ink);
-  font: 15px/1.5 "Noto Sans SC", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
-}
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.6 var(--body); }
 h1, h2, p { margin: 0; }
-button, select, input { font: inherit; color: inherit; }
-button, select { min-height: 40px; border: 1px solid var(--line); background: var(--sheet); }
-button { padding: 7px 12px; cursor: pointer; white-space: nowrap; }
-button.primary { border-color: var(--ink); background: var(--ink); color: var(--sheet); font-weight: 700; }
-button:not(:disabled):hover { border-color: var(--ink); background: var(--accent); color: var(--ink); }
-button:disabled, select:disabled, input:disabled { opacity: .52; cursor: default; }
-:focus-visible { outline: 3px solid #9e7300; outline-offset: 3px; }
-code, .numeric { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+button, select { font: inherit; color: inherit; border: 1px solid var(--ink); border-radius: 0; background: var(--surface); }
+button { padding: 7px 14px; font-weight: 650; cursor: pointer; }
+button.primary { background: var(--ink); color: var(--bg); }
+button:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); color: #15171a; }
+button:disabled, select:disabled { opacity: .45; cursor: default; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.mono, code { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.wrap { max-width: 1120px; margin-inline: auto; padding-inline: clamp(12px, 4vw, 28px); }
 .masthead { border-bottom: 3px solid var(--ink); }
-.wrap { width: min(100% - 32px, 1040px); margin-inline: auto; }
-.masthead .wrap { min-height: 100px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-block: 16px; }
-.brand { font-size: 13px; color: var(--muted); font-weight: 700; }
-h1 { font-size: clamp(27px, 4vw, 39px); line-height: 1.18; font-weight: 900; letter-spacing: -.035em; }
-.openers, .buttons, .speed { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-#choose-folder { border-color: var(--ink); background: var(--accent); color: var(--ink); }
+.masthead .wrap { display: flex; align-items: center; justify-content: space-between; gap: 10px 16px; flex-wrap: wrap; padding-block: 15px; }
+.brand { color: var(--muted); font-size: 13px; font-weight: 700; }
+h1 { font-size: clamp(27px, 4vw, 38px); line-height: 1.15; font-weight: 900; }
+.openers { display: flex; gap: 8px; flex-wrap: wrap; }
+#choose-folder { background: var(--accent); color: #15171a; }
 #choose-folder:hover { background: #ffe17b; }
-.workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(268px, 318px); gap: 18px; align-items: start; padding-block: 22px; }
-.card { border: 1px solid var(--line); background: var(--sheet); min-width: 0; }
-.board-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-h2 { font-size: 15px; font-weight: 800; }
-.board-top h2 { overflow-wrap: anywhere; }
-.board-top .numeric { font-size: 13px; color: var(--muted); white-space: nowrap; }
-.board-shell { padding: 12px; background: #f8f9f6; }
-canvas { display: block; width: 100%; aspect-ratio: 1; background: var(--line); }
-.board-shell > * { max-width: max(300px, calc(100svh - 226px)); margin-inline: auto; }
-.empty {
-  aspect-ratio: 1;
-  display: grid;
-  place-content: center;
-  gap: 8px;
-  padding: 18px;
-  text-align: center;
-  border: 1px solid var(--line);
-  background: repeating-linear-gradient(0deg, transparent 0 15px, #e8ebe5 15px 16px),
-              repeating-linear-gradient(90deg, #f8f9f6 0 15px, #e8ebe5 15px 16px);
+main { padding-block: 20px 32px; }
+.file-picker {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 14px;
+  padding: 10px 12px; border: 1px solid var(--ink); background: var(--surface);
 }
-.empty strong { font-size: clamp(19px, 3vw, 25px); }
-.controls { display: grid; gap: 10px; }
-.controls input { width: 100%; margin: 0; accent-color: var(--ink); }
-.control-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
-#play { min-width: 67px; }
-.speed { font-size: 13px; }
-.speed select { padding-inline: 6px; }
-aside { display: grid; gap: 12px; }
-aside section { padding: 14px; }
-.file-label { display: block; font-size: 15px; font-weight: 800; margin-bottom: 7px; }
-#replay-list { width: 100%; min-width: 0; padding-inline: 8px; }
-.hint { color: var(--muted); font-size: 13px; }
-#file-status { margin-top: 8px; overflow-wrap: anywhere; }
-#file-status.error { color: var(--red); }
-.scores { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.side { min-width: 0; border: 1px solid var(--line); border-top: 3px solid var(--blue); padding: 7px 9px; }
-.side:last-child { border-top-color: var(--red); }
-.side b { display: block; overflow-wrap: anywhere; }
-.points { font-size: 24px; font-weight: 750; }
-.side small { display: block; color: var(--muted); }
-#result { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 9px; overflow-wrap: anywhere; font-size: 13px; }
-#events { margin: 7px 0 0; padding-left: 17px; font-size: 13px; overflow-wrap: anywhere; }
-#events li + li { margin-top: 4px; }
-.legend { display: flex; gap: 8px 12px; flex-wrap: wrap; margin-top: 8px; color: var(--muted); font-size: 12px; }
-.legend span { display: flex; align-items: center; gap: 5px; }
-.legend i { width: 10px; height: 10px; background: var(--chip); display: inline-block; flex: none; }
-.legend .outline { border: 2px solid var(--blue); background: var(--cell); }
-.legend .order { border: 1px dashed var(--order); background: transparent; }
-.legend .boost { transform: rotate(45deg) scale(.8); }
-.legend .latent { background: var(--blue-field); border: 2px solid var(--blue-field); box-shadow: inset 0 0 0 3px var(--sheet); }
-@media (max-width: 760px) {
-  .workspace { grid-template-columns: minmax(0, 1fr); gap: 12px; padding-block: 15px; }
-  .files-card { grid-row: 1; }
-  .controls { grid-row: 2; }
-  .board-shell > * { max-width: none; }
-  aside { display: contents; }
+.file-picker label { font-weight: 650; }
+#replay-list { width: 100%; min-width: 0; padding: 6px 8px; border-color: var(--line); }
+#file-status { grid-column: 1 / -1; color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
+#file-status:empty { display: none; }
+#file-status[data-error] { color: var(--error); }
+
+#match-replay {
+  margin-top: 20px;
+  --replay-cell: #e6e8e3; --replay-defect: #3b4149; --replay-key: #f2c200;
+  --replay-order: #a26100; --replay-boost: #8546bd;
 }
-@media (max-width: 440px) {
-  .wrap { width: calc(100% - 20px); }
-  .masthead .wrap { align-items: flex-start; flex-direction: column; gap: 10px; }
-  .board-shell { padding: 7px; }
-  .board-top { padding-inline: 10px; }
+.replay-head {
+  display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap;
+  gap: 4px 12px; padding-bottom: 8px; margin-bottom: 12px; border-bottom: 1px solid var(--ink);
+}
+#replay-title { font-size: 20px; line-height: 1.35; }
+#replay-match { overflow-wrap: anywhere; }
+.replay-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 24px; align-items: start; }
+.replay-board { padding: 10px; border: 1px solid var(--ink); background: var(--surface); }
+.replay-board canvas { display: block; width: 100%; aspect-ratio: 1; }
+.replay-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.replay-legend i { display: inline-block; width: 11px; height: 11px; margin-right: 5px; vertical-align: -1px; }
+.replay-info { display: grid; min-width: 0; gap: 12px; }
+.replay-scores { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--ink); }
+.replay-side { padding: 10px 12px; background: var(--surface); overflow-wrap: anywhere; border-top: 4px solid var(--blue); }
+.replay-side + .replay-side { border-left: 1px solid var(--ink); border-top-color: var(--red); }
+.replay-side [data-score] { display: block; font-size: 29px; line-height: 1.15; }
+.replay-side [data-state], .replay-side [data-command] { font-size: 12px; color: var(--muted); }
+.replay-result { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap; gap: 4px 14px; }
+.replay-timeline { width: 100%; margin: 0; accent-color: var(--ink); }
+.replay-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.replay-controls button { padding: 5px 9px; }
+.replay-controls [aria-pressed="true"] { background: var(--accent); color: #15171a; border-color: var(--accent); }
+.replay-detail { padding: 6px 9px; border-left: 3px solid var(--line); background: var(--surface); font-size: 13px; }
+#replay-order[data-active] { border-color: var(--replay-order); }
+#replay-boost[data-active] { border-color: var(--replay-boost); }
+.replay-log { border-top: 1px solid var(--ink); }
+.replay-log h3 { margin: 6px 0 2px; font-size: 13px; }
+.replay-log ol { margin: 0; padding: 0; list-style: none; max-height: 224px; overflow-y: auto; font-size: 13px; }
+.replay-log li { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
+@media (prefers-color-scheme: dark) {
+  #match-replay { --replay-cell: #303437; --replay-defect: #737985; --replay-order: #ffc266; --replay-boost: #c593ff; }
+}
+@media (max-width: 800px) {
+  .replay-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
 }
 </style>
 </head>
@@ -126,324 +115,414 @@ aside section { padding: 14px; }
     </div>
   </div>
 </header>
-<main class="workspace wrap">
-  <section class="card" aria-labelledby="map-title">
-    <header class="board-top">
-      <h2 id="map-title">基板</h2>
-      <span id="turn-label" class="numeric">未加载</span>
-    </header>
-    <div class="board-shell">
-      <canvas id="board" role="img" aria-label="对局基板" hidden></canvas>
-      <div class="empty" id="empty">
-        <strong>暂无回放画面</strong>
-        <p class="hint">也可选择回放文件夹或打开 JSON。</p>
+<main class="wrap">
+  <div class="file-picker">
+    <label for="replay-list">回放文件</label>
+    <select id="replay-list" disabled><option>正在加载回放…</option></select>
+    <p id="file-status" role="status"></p>
+  </div>
+  <section id="match-replay" aria-labelledby="replay-title" hidden>
+    <header class="replay-head"><h2 id="replay-title">对局回放</h2><span id="replay-match" class="mono"></span></header>
+    <div class="replay-layout">
+      <div class="replay-board">
+        <canvas id="replay-canvas" role="img" aria-label="对局基板"></canvas>
+        <div class="replay-legend" id="replay-legend"></div>
+      </div>
+      <div class="replay-info">
+        <div class="replay-scores">
+          <div class="replay-side">
+            <strong>蓝方</strong> <span class="mono" data-team></span>
+            <strong class="mono" data-score></strong><p data-state></p><p data-command></p>
+          </div>
+          <div class="replay-side">
+            <strong>红方</strong> <span class="mono" data-team></span>
+            <strong class="mono" data-score></strong><p data-state></p><p data-command></p>
+          </div>
+        </div>
+        <div class="replay-result"><span class="mono" id="replay-turn"></span><strong id="replay-result"></strong></div>
+        <input class="replay-timeline" id="replay-seek" type="range" min="0" max="0" value="0" aria-label="跳到回合">
+        <div class="replay-controls" role="group" aria-label="播放控制">
+          <button type="button" id="replay-restart">重新开始</button>
+          <button type="button" id="replay-back" aria-label="后退一回合">◀ 1</button>
+          <button type="button" id="replay-play" class="primary">播放</button>
+          <button type="button" id="replay-next" aria-label="前进一回合">1 ▶</button>
+          <button type="button" data-speed="4" aria-pressed="false" aria-label="每秒 4 回合">4 回合/秒</button>
+          <button type="button" data-speed="12" aria-pressed="true" aria-label="每秒 12 回合">12</button>
+          <button type="button" data-speed="40" aria-pressed="false" aria-label="每秒 40 回合">40</button>
+        </div>
+        <p class="replay-detail" id="replay-boost"></p>
+        <p class="replay-detail" id="replay-order"></p>
+        <div class="replay-log"><h3>最近事件</h3><ol id="replay-events"></ol></div>
       </div>
     </div>
   </section>
-  <aside aria-label="对局信息">
-    <section class="card files-card">
-      <label class="file-label" for="replay-list">回放文件</label>
-      <select id="replay-list" disabled><option>正在加载回放…</option></select>
-      <p id="file-status" class="hint" role="status"></p>
-    </section>
-    <section class="card controls" aria-label="播放回放">
-      <input type="range" id="timeline" min="0" max="0" value="0" aria-label="跳到回合" disabled>
-      <div class="control-row">
-        <div class="buttons" role="group" aria-label="播放控制">
-          <button type="button" id="previous" disabled>上一回合</button>
-          <button type="button" id="play" class="primary" disabled>播放</button>
-          <button type="button" id="next" disabled>下一回合</button>
-        </div>
-        <label class="speed">速度
-          <select id="speed" disabled>
-            <option value="4">4 回合/秒</option>
-            <option value="12" selected>12 回合/秒</option>
-            <option value="24">24 回合/秒</option>
-          </select>
-        </label>
-      </div>
-    </section>
-    <section class="card" id="score-card" aria-label="对局比分" hidden>
-      <div class="scores">
-        <div class="side"><b id="name-0"></b><strong class="points numeric" id="score-0"></strong><small id="bonus-0"></small><small id="command-0"></small></div>
-        <div class="side"><b id="name-1"></b><strong class="points numeric" id="score-1"></strong><small id="bonus-1"></small><small id="command-1"></small></div>
-      </div>
-      <p id="result"></p>
-    </section>
-    <section class="card" id="event-card" hidden>
-      <h2>本回合事件</h2>
-      <ul id="events"></ul>
-    </section>
-    <section class="card" id="legend-card" hidden>
-      <h2>图例</h2>
-      <div class="legend">
-        <span><i style="--chip:var(--blue-field)"></i>蓝方区域</span>
-        <span><i style="--chip:var(--red-field)"></i>红方区域</span>
-        <span><i class="outline"></i>轮廓</span>
-        <span><i style="--chip:var(--defect)"></i>缺陷</span>
-        <span><i style="--chip:var(--key)"></i>关键格</span>
-        <span><i class="order"></i>订单</span>
-        <span><i class="boost" style="--chip:var(--boost)"></i>加速道具</span>
-        <span id="latent-legend" hidden><i class="latent"></i>潜像</span>
-      </div>
-    </section>
-  </aside>
 </main>
 <script src="./replays/index.js"></script>
 <script>
-(() => {
+// Adapted from contest/service/replay.js for offline playback.
+const replayPlayer = (() => {
   'use strict';
-  const byId = id => document.getElementById(id);
-  const canvas = byId('board');
-  const ctx = canvas.getContext('2d');
-  const list = byId('replay-list');
-  const status = byId('file-status');
-  const timeline = byId('timeline');
-  const play = byId('play');
-  const previous = byId('previous');
-  const next = byId('next');
-  const speed = byId('speed');
-  const cellSize = 16;
-  const style = getComputedStyle(document.documentElement);
-  const color = name => style.getPropertyValue('--' + name).trim();
-  const field = [color('blue-field'), color('red-field')];
-  const team = [color('blue'), color('red')];
-  const paint = { line: color('line'), cell: color('cell'), defect: color('defect'), key: color('key'),
-    order: color('order'), boost: color('boost'), sheet: color('sheet') };
-  const directions = new Map([
-    ['U', [0, -1, '↑']], ['D', [0, 1, '↓']], ['L', [-1, 0, '←']], ['R', [1, 0, '→']]
-  ]);
-  const reasons = { limit: '得分', bonus: '订单奖励', lead_turns: '领先回合数', time: '累计响应时间',
-    tie: '四项指标相同', startup: 'Bot 未就绪', crash: 'Bot 退出', errors: '累计错误达到上限' };
-  const eventNames = new Map(Object.entries({
-    close: '闭合轮廓', enclose: '围困', cut: '轮廓被切断', selfcut: '扫过自身轮廓', collide: '束斑相撞',
-    crash: '碰撞缺陷或边界', down: '束斑失效', respawn: '束斑恢复', void: '潜像被清除',
-    develop: '潜像显影', decay: '区域衰减', orderspawn: '订单公示', orderexpire: '订单到期',
-    boostannounce: '加速道具预告', boostspawn: '加速道具出现', boostgone: '加速道具消失',
-    pickup: '拾取加速道具', end: '对局结束'
-  }));
-  const sides = [0, 1].map(seat => ({
-    name: byId('name-' + seat), score: byId('score-' + seat),
-    bonus: byId('bonus-' + seat), command: byId('command-' + seat)
-  }));
-  let files = [];
-  let request = 0;
-  let replay = null;
-  let terrain = '';
-  let layers = [];
+  const view = document.getElementById('match-replay');
+  const field = name => document.getElementById('replay-' + name);
+  const canvas = field('canvas');
+  const slider = field('seek');
+  const sideNames = ['蓝方', '红方'];
+  const sideCards = [...view.querySelectorAll('.replay-side')];
+  const speeds = [...view.querySelectorAll('[data-speed]')];
+  const direction = {U: '上', D: '下', L: '左', R: '右'};
+  const offsets = {U: [0, -1], D: [0, 1], L: [-1, 0], R: [1, 0]};
+  const reasons = {time: '耗时决胜', bonus: '订单奖励决胜', lead_turns: '领先回合数决胜',
+    crash: '程序退出', errors: '累计错误', startup: '未就绪'};
+  const eventText = {
+    close: event => '闭合轮廓，获得 ' + event.gain + ' 分',
+    cut: () => '切断对手轮廓',
+    selfcut: () => '踩到自身轮廓',
+    crash: () => '撞上缺陷或出界',
+    collide: () => '束斑相撞',
+    void: event => '使对手 ' + event.n + ' 格潜像作废',
+    enclose: () => '围住对手轮廓',
+    down: () => '停机校准',
+    respawn: () => '在校准区重启',
+    develop: event => '显影 ' + event.n + ' 格',
+    decay: event => event.n + ' 格失效',
+    orderspawn: event => '公示订单 ' + event.no,
+    orderexpire: event => '订单 ' + event.no + ' 结算' +
+      (Array.isArray(event.got) ? ' · 蓝 +' + event.got[0] + ' / 红 +' + event.got[1] : ''),
+    pickup: () => '拾取加速道具',
+    boostannounce: event => '预告第 ' + event.at + ' 回合出现加速道具',
+    boostspawn: () => '加速道具出现',
+    boostgone: () => '加速道具消失',
+    end: () => '对局结束'
+  };
+  let replay, owner, contour, latent, terrain, colors;
   let turn = 0;
-  let timer = null;
+  let speed = 12;
+  let animation = 0;
+  let last = 0;
 
   function validate(data) {
-    if (data?.version !== 'v1') throw new Error('回放版本无效或不受支持。');
-    const { map, init, players, frames, result } = data;
+    if (data?.version !== 'v1') throw new Error('回放版本不受支持');
+    const {map, init, frames, players, result} = data;
     const size = map?.size;
+    const pair = items => Array.isArray(items) && items.length === 2;
+    const grid = (value, pattern) => typeof value === 'string' && value.length === size ** 2 && pattern.test(value);
+    const state = record => pair(record?.beams) && record.beams.every(beam =>
+      typeof beam?.alive === 'boolean' && Object.hasOwn(direction, beam.dir)) &&
+      pair(record.score) && record.score.every(Number.isFinite) &&
+      pair(record.bonus) && record.bonus.every(Number.isFinite);
     if (!Number.isInteger(size) || size < 1 || size > 128 || !Array.isArray(map.terrain) ||
-        map.terrain.length !== size ||
-        !map.terrain.every(row => typeof row === 'string' && row.length === size && /^[.#*]+$/.test(row))) {
-      throw new Error('回放地图的尺寸或地形数据无效。');
-    }
-    const length = size * size;
-    const grid = value => typeof value === 'string' && value.length === length && /^[.01]+$/.test(value);
-    const latent = init?.latent;
-    if (!grid(init?.owner) || !grid(init?.contour) ||
-        (latent !== undefined && (typeof latent !== 'string' || latent.length !== length || !/^[.1-9]+$/.test(latent)))) {
-      throw new Error('回放的初始网格无效。');
-    }
-    const pair = value => Array.isArray(value) && value.length === 2;
-    const position = frame => pair(frame?.beams) && frame.beams.every(beam => beam && typeof beam.alive === 'boolean') &&
-      pair(frame.score) && frame.score.every(Number.isFinite) && pair(frame.bonus) && frame.bonus.every(Number.isFinite);
-    if (!pair(players) || !players.every(name => typeof name === 'string') || !position(init) ||
+        map.terrain.length !== size || !map.terrain.every(row => typeof row === 'string' && row.length === size && /^[.#*]+$/.test(row)) ||
+        (map.calib != null && (!pair(map.calib) || !map.calib.every(pair))) ||
+        !pair(players) || !players.every(name => typeof name === 'string') || !state(init) ||
+        !grid(init.owner, /^[.01]+$/) || !grid(init.contour, /^[.01]+$/) ||
+        ((data.stage === 'final' || init.latent !== undefined) && !grid(init.latent, /^[.1-9]+$/)) ||
         !Array.isArray(frames) || result?.turns !== frames.length || ![0, 1, null].includes(result.winner)) {
-      throw new Error('回放缺少双方状态或终局结果。');
+      throw new Error('回放数据不完整');
     }
-    for (const [index, frame] of frames.entries()) {
-      if (!position(frame) || frame.turn !== index + 1 || !Array.isArray(frame.d) || !frame.d.every(delta =>
-        Array.isArray(delta) && Number.isInteger(delta[0]) && delta[0] >= 0 && delta[0] < length &&
-        ['.', '0', '1'].includes(delta[1]) && ['.', '0', '1'].includes(delta[2]) &&
-        (latent === undefined || (typeof delta[3] === 'string' && /^[.1-9]$/.test(delta[3]))))) {
-        throw new Error('第 ' + (index + 1) + ' 回合的回放帧无效。');
-      }
+    if (frames.some((frame, index) => !state(frame) || frame.turn !== index + 1 ||
+        !Array.isArray(frame.d) || frame.d.some(delta =>
+          !Array.isArray(delta) || !Number.isInteger(delta[0]) || delta[0] < 0 || delta[0] >= size ** 2 ||
+          !['.', '0', '1'].includes(delta[1]) || !['.', '0', '1'].includes(delta[2]) ||
+          (init.latent !== undefined && (typeof delta[3] !== 'string' || !/^[.1-9]$/.test(delta[3])))))) {
+      throw new Error('回放帧无效');
     }
-    return data;
-  }
-
-  function syncControls() {
-    const total = replay?.frames.length || 0;
-    timeline.max = total;
-    timeline.value = turn;
-    timeline.disabled = speed.disabled = play.disabled = total === 0;
-    previous.disabled = turn === 0;
-    next.disabled = turn >= total;
-    play.textContent = timer !== null ? '暂停' : total && turn === total ? '重播' : '播放';
-    byId('turn-label').textContent = replay ? '回合 ' + turn + ' / ' + total : '未加载';
-  }
-
-  function pause() {
-    if (timer !== null) clearInterval(timer);
-    timer = null;
-    syncControls();
   }
 
   function resetGrid() {
-    layers = [Array.from(replay.init.owner), Array.from(replay.init.contour)];
-    if (replay.init.latent !== undefined) layers.push(Array.from(replay.init.latent));
+    owner = [...replay.init.owner];
+    contour = [...replay.init.contour];
+    latent = [...(replay.init.latent ?? '.'.repeat(owner.length))];
     turn = 0;
   }
 
   function seek(target) {
-    target = Math.min(Math.max(target, 0), replay.frames.length);
     if (target < turn) resetGrid();
     while (turn < target) {
-      for (const [index, ...values] of replay.frames[turn].d) {
-        layers.forEach((layer, number) => { layer[index] = values[number]; });
+      for (const [index, nextOwner, nextContour, nextLatent = '.'] of replay.frames[turn].d) {
+        owner[index] = nextOwner;
+        contour[index] = nextContour;
+        latent[index] = nextLatent;
       }
-      turn++;
+      turn += 1;
     }
-    render(turn === 0 ? replay.init : replay.frames[turn - 1]);
-    syncControls();
+    render();
   }
 
-  function inBoard(x, y) {
+  function blend(color, background, alpha) {
+    const channels = hex => {
+      const digits = hex.slice(1);
+      const value = parseInt(digits.length === 3 ? digits.replace(/./g, '$&$&') : digits, 16);
+      return [value >> 16 & 255, value >> 8 & 255, value & 255];
+    };
+    const base = channels(background);
+    return 'rgb(' + channels(color).map((value, index) => Math.round(value * alpha + base[index] * (1 - alpha))).join(',') + ')';
+  }
+
+  function palette() {
+    const css = getComputedStyle(view);
+    const read = name => css.getPropertyValue('--' + name).trim();
+    const surface = read('surface');
+    const sides = [read('blue'), read('red')];
+    return {surface, sides, exposed: sides.map(color => blend(color, surface, .72)),
+      latent: sides.map(color => blend(color, surface, .28)),
+      cell: read('replay-cell'), defect: read('replay-defect'), key: read('replay-key'),
+      order: read('replay-order'), boost: read('replay-boost')};
+  }
+
+  function drawBoard(state) {
+    const width = Math.round(canvas.clientWidth * (window.devicePixelRatio || 1));
+    if (!width) return;
+    if (canvas.width !== width || canvas.height !== width) canvas.width = canvas.height = width;
+    const context = canvas.getContext('2d');
     const size = replay.map.size;
-    return Number.isInteger(x) && Number.isInteger(y) && x >= 0 && y >= 0 && x < size && y < size;
-  }
-
-  function diamond(point, solid) {
-    if (!point || !inBoard(point.x, point.y)) return;
-    const x = (point.x + .5) * cellSize, y = (point.y + .5) * cellSize;
-    ctx.beginPath();
-    ctx.moveTo(x, y - 7);
-    ctx.lineTo(x + 7, y);
-    ctx.lineTo(x, y + 7);
-    ctx.lineTo(x - 7, y);
-    ctx.closePath();
-    ctx.save();
-    ctx.fillStyle = ctx.strokeStyle = paint.boost;
-    ctx.lineWidth = 2;
-    if (solid) ctx.fill();
-    else { ctx.setLineDash([2, 2]); ctx.stroke(); }
-    ctx.restore();
-  }
-
-  function draw(frame) {
-    const size = replay.map.size;
-    const [owner, contour, latent] = layers;
-    ctx.fillStyle = paint.line;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    for (let index = 0; index < terrain.length; index++) {
-      const x = (index % size) * cellSize, y = Math.floor(index / size) * cellSize;
-      const cell = terrain[index];
-      ctx.fillStyle = cell === '#' ? paint.defect : field[owner[index]] || paint.cell;
-      ctx.fillRect(x, y, cellSize - 1, cellSize - 1);
-      if (contour[index] !== '.') {
-        ctx.strokeStyle = team[contour[index]];
-        ctx.lineWidth = 2;
-        ctx.strokeRect(x + 3, y + 3, 9, 9);
+    const cell = width / size;
+    const gap = cell * .07;
+    const fill = (color, x, y, length) => {
+      context.fillStyle = color;
+      context.fillRect(x, y, length, length);
+    };
+    fill(colors.surface, 0, 0, width);
+    for (let index = 0; index < terrain.length; index += 1) {
+      const x = (index % size) * cell + gap / 2;
+      const y = Math.floor(index / size) * cell + gap / 2;
+      const length = cell - gap;
+      const tile = terrain[index];
+      const seat = owner[index];
+      if (tile === '#') {
+        fill(colors.defect, x, y, length);
+        continue;
       }
-      if (cell === '*') {
-        ctx.fillStyle = paint.key;
-        ctx.fillRect(x + 6, y + 6, 4, 4);
+      const hidden = latent[index] !== '.';
+      fill(seat === '.' ? colors.cell : (hidden ? colors.latent : colors.exposed)[seat], x, y, length);
+      if (tile === '*') fill(colors.key, x + length * .3, y + length * .3, length * .4);
+      if (hidden && seat !== '.' && tile !== '*' && cell >= 12) {
+        context.fillStyle = colors.sides[seat];
+        context.font = '600 ' + Math.round(cell * .44) + 'px monospace';
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillText(latent[index], x + length / 2, y + length / 2);
       }
-      if (latent && latent[index] !== '.') {
-        ctx.fillStyle = paint.sheet;
-        ctx.fillRect(x + 2, y + 2, 3, 3);
-      }
+      const trail = contour[index];
+      if (trail !== '.') fill(colors.sides[trail], x + length * .23, y + length * .23, length * .54);
     }
-    const rect = frame.order?.rect;
-    if (Array.isArray(rect) && rect.length === 4 && inBoard(rect[0], rect[1]) && inBoard(rect[2], rect[3])) {
-      const [x0, y0, x1, y1] = rect;
-      ctx.save();
-      ctx.strokeStyle = paint.order;
-      ctx.lineWidth = 2;
-      ctx.setLineDash([6, 3]);
-      ctx.strokeRect(x0 * cellSize + 1, y0 * cellSize + 1,
-        (x1 - x0 + 1) * cellSize - 3, (y1 - y0 + 1) * cellSize - 3);
-      ctx.restore();
+    context.lineWidth = Math.max(1.5, cell * .12);
+    (replay.map.calib ?? []).forEach(([x, y], seat) => {
+      context.strokeStyle = colors.sides[seat];
+      context.strokeRect((x - 1) * cell + 1, (y - 1) * cell + 1, 3 * cell - 2, 3 * cell - 2);
+    });
+    if (Array.isArray(state.order?.rect) && state.order.rect.length === 4) {
+      const [left, top, right, bottom] = state.order.rect;
+      context.save();
+      context.strokeStyle = colors.order;
+      context.setLineDash([cell * .5, cell * .3]);
+      context.strokeRect(left * cell + 1, top * cell + 1,
+        (right - left + 1) * cell - 2, (bottom - top + 1) * cell - 2);
+      context.restore();
     }
-    diamond(frame.boost_next, false);
-    diamond(frame.boost, true);
-    frame.beams.forEach((beam, seat) => {
-      if (!beam.alive || !inBoard(beam.x, beam.y)) return;
-      const x = beam.x * cellSize + 2, y = beam.y * cellSize + 2;
-      ctx.fillStyle = team[seat];
-      ctx.fillRect(x, y, 12, 12);
-      ctx.strokeStyle = beam.boost_left > 0 ? paint.boost : paint.sheet;
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x, y, 12, 12);
-      const [dx, dy] = directions.get(beam.dir) || [0, 0];
-      ctx.fillStyle = paint.sheet;
-      ctx.beginPath();
-      ctx.arc(x + 6 + 3 * dx, y + 6 + 3 * dy, 2, 0, Math.PI * 2);
-      ctx.fill();
+    const boost = state.boost || state.boost_next;
+    if (boost) {
+      context.save();
+      context.translate((boost.x + .5) * cell, (boost.y + .5) * cell);
+      context.rotate(Math.PI / 4);
+      context.strokeStyle = colors.boost;
+      const half = cell * .45;
+      if (state.boost) fill(colors.boost, -half, -half, half * 2);
+      else {
+        context.setLineDash([cell * .25, cell * .18]);
+        context.strokeRect(-half, -half, half * 2, half * 2);
+      }
+      context.restore();
+    }
+    state.beams.forEach((beam, seat) => {
+      if (!beam.alive) return;
+      const x = beam.x * cell;
+      const y = beam.y * cell;
+      const inset = cell * .08;
+      const [dx, dy] = offsets[beam.dir];
+      fill(colors.sides[seat], x + inset, y + inset, cell - 2 * inset);
+      context.strokeStyle = beam.boost_left > 0 ? colors.boost : colors.surface;
+      context.strokeRect(x + inset, y + inset, cell - 2 * inset, cell - 2 * inset);
+      context.fillStyle = colors.surface;
+      context.beginPath();
+      context.arc(x + cell * (.5 + .22 * dx), y + cell * (.5 + .22 * dy), cell * .12, 0, 2 * Math.PI);
+      context.fill();
     });
   }
 
-  function render(frame) {
-    draw(frame);
-    sides.forEach((side, seat) => {
-      side.name.textContent = replay.players[seat];
-      side.score.textContent = frame.score[seat];
-      side.bonus.textContent = '订单奖励 ' + frame.bonus[seat];
-      const command = frame.cmds?.[seat];
-      const arrow = typeof command === 'string' && directions.get(command[0]);
-      const elapsed = frame.ms?.[seat];
-      side.command.textContent = arrow ? '指令 ' + arrow[2] + (command.endsWith('+') ? '+' : '') :
-        turn === 0 ? '初始局面' : '指令 —';
-      if (Number.isFinite(elapsed)) side.command.textContent += ' · ' + elapsed + ' ms';
-    });
-    const events = byId('events');
-    events.replaceChildren();
-    const entries = Array.isArray(frame.events) ? frame.events.filter(event => event && typeof event.t === 'string') : [];
-    const labels = entries.map(event => {
-      const seat = event.s;
-      const name = seat === 0 || seat === 1 ? replay.players[seat] + ' · ' : '';
-      return name + (eventNames.get(event.t) || event.t);
-    });
-    for (const label of labels.length ? labels : [turn === 0 ? '初始局面' : '本回合无事件']) {
-      const item = document.createElement('li');
-      item.textContent = label;
-      events.append(item);
-    }
+  function renderLegend() {
+    const items = [['蓝方图形区', colors.exposed[0]], ['红方图形区', colors.exposed[1]],
+      ['基板缺陷', colors.defect], ['关键图形区', colors.key], ['订单区域', colors.order], ['加速道具', colors.boost]];
+    if (replay.stage === 'final') items.splice(2, 0, ['蓝方潜像', colors.latent[0]], ['红方潜像', colors.latent[1]]);
+    field('legend').replaceChildren(...items.map(([label, color]) => {
+      const marker = document.createElement('i');
+      marker.style.backgroundColor = color;
+      const item = document.createElement('span');
+      item.append(marker, label);
+      return item;
+    }));
   }
 
-  function setReplay(data) {
-    replay = data;
-    turn = 0;
+  function renderEvents() {
+    const rows = [];
+    for (let frame = turn; frame > 0 && rows.length < 12; frame -= 1) {
+      const events = replay.frames[frame - 1].events;
+      if (!Array.isArray(events)) continue;
+      for (let index = events.length - 1; index >= 0 && rows.length < 12; index -= 1) {
+        const event = events[index];
+        if (typeof event?.t !== 'string' || !Object.hasOwn(eventText, event.t) ||
+            (event.t === 'develop' && frame !== turn)) continue;
+        const row = document.createElement('li');
+        const number = document.createElement('code');
+        number.textContent = '#' + frame;
+        const side = event.t === 'end' ? '' : sideNames[event.s];
+        row.append(number, (side ? side + ' ' : '') + eventText[event.t](event));
+        rows.push(row);
+      }
+    }
+    if (!rows.length) {
+      const empty = document.createElement('li');
+      empty.textContent = '暂无事件';
+      rows.push(empty);
+    }
+    field('events').replaceChildren(...rows);
+  }
+
+  function syncPlayback() {
+    if (!replay) return;
+    const total = replay.frames.length;
+    field('play').textContent = animation ? '暂停' : total > 0 && turn === total ? '重播' : '播放';
+    field('play').disabled = field('restart').disabled = slider.disabled = total === 0;
+    field('back').disabled = turn === 0;
+    field('next').disabled = turn === total;
+    slider.value = turn;
+  }
+
+  function render() {
+    const state = replay.frames[turn - 1] ?? replay.init;
+    drawBoard(state);
+    sideCards.forEach((card, seat) => {
+      const beam = state.beams[seat];
+      const status = beam.alive ? '（' + beam.x + ', ' + beam.y + '）向' + direction[beam.dir] :
+        '停机校准 · ' + beam.restart_in + ' 回合';
+      card.querySelector('[data-score]').textContent = state.score[seat];
+      card.querySelector('[data-state]').textContent = status +
+        (beam.boost_left ? ' · 加速 ' + beam.boost_left : '') + (state.bonus[seat] ? ' · 订单 +' + state.bonus[seat] : '');
+      const command = state.cmds?.[seat];
+      const move = typeof command === 'string' && direction[command[0]];
+      const elapsed = state.ms?.[seat];
+      const summary = move ? '指令 ' + move + (command.endsWith('+') ? '+' : '') : turn ? '指令 —' : '初始局面';
+      card.querySelector('[data-command]').textContent = summary + (Number.isFinite(elapsed) ? ' · ' + elapsed + ' ms' : '');
+    });
+    field('turn').textContent = '第 ' + turn + ' / ' + replay.frames.length + ' 回合';
+    const {winner, reason} = replay.result;
+    const result = winner === null ? '未决胜' : sideNames[winner] + '获胜';
+    field('result').textContent = turn === replay.frames.length ? result + (reasons[reason] ? ' · ' + reasons[reason] : '') : '';
+    field('order').toggleAttribute('data-active', Boolean(state.order));
+    field('order').textContent = state.order ? '订单 ' + state.order.no + ' · ' + (state.order.until - turn) + ' 回合后到期' : '暂无订单';
+    const boost = state.boost || state.boost_next;
+    field('boost').toggleAttribute('data-active', Boolean(boost));
+    field('boost').textContent = boost ? '加速道具 · ' + (state.boost ? '已出现' : (boost.at - turn) + ' 回合后出现') +
+      '（' + boost.x + ', ' + boost.y + '）' : '暂无加速道具';
+    renderEvents();
+    syncPlayback();
+  }
+
+  function pause() {
+    cancelAnimationFrame(animation);
+    animation = 0;
+    syncPlayback();
+  }
+
+  function tick(now) {
+    if (now - last >= 1000 / speed) {
+      last = now;
+      seek(turn + 1);
+    }
+    if (turn < replay.frames.length) animation = requestAnimationFrame(tick);
+    else pause();
+  }
+
+  function play() {
+    if (!replay?.frames.length || animation) return;
+    if (turn === replay.frames.length) seek(0);
+    last = performance.now();
+    animation = requestAnimationFrame(tick);
+    syncPlayback();
+  }
+
+  field('play').addEventListener('click', () => animation ? pause() : play());
+  field('restart').addEventListener('click', () => { pause(); seek(0); play(); });
+  field('back').addEventListener('click', () => { pause(); seek(turn - 1); });
+  field('next').addEventListener('click', () => { pause(); seek(turn + 1); });
+  slider.addEventListener('input', () => {
+    const target = Number(slider.value);
     pause();
-    canvas.hidden = byId('score-card').hidden = byId('event-card').hidden = byId('legend-card').hidden = !data;
-    byId('empty').hidden = Boolean(data);
-    byId('map-title').textContent = '基板';
-    if (!data) return;
-    terrain = data.map.terrain.join('');
-    byId('latent-legend').hidden = data.init.latent === undefined;
-    canvas.width = canvas.height = data.map.size * cellSize;
-    const stage = data.stage === 'final' ? '决赛' : '初赛';
-    byId('map-title').textContent = (data.map.id || '基板') + ' · ' + stage;
-    const { winner, reason, turns } = data.result;
-    const outcome = winner === null ? (reason === 'tie' ? '平局' : '未判定胜方') : data.players[winner] + ' 获胜';
-    byId('result').textContent = '终局 · ' + outcome + '（' + (reasons[reason] || reason || '对局结束') + '） · ' + turns + ' 回合';
-    resetGrid();
-    seek(0);
+    seek(target);
+  });
+  for (const button of speeds) button.addEventListener('click', () => {
+    speed = Number(button.dataset.speed);
+    for (const choice of speeds) choice.setAttribute('aria-pressed', String(choice === button));
+  });
+  window.addEventListener('resize', () => { if (replay) drawBoard(replay.frames[turn - 1] ?? replay.init); });
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    if (!replay) return;
+    colors = palette();
+    renderLegend();
+    render();
+  });
+
+  return {
+    load(data, label) {
+      validate(data);
+      pause();
+      replay = data;
+      terrain = replay.map.terrain.join('');
+      resetGrid();
+      field('match').textContent = label + ' · ' + (replay.map.id || '基板') + ' · ' + (replay.stage === 'final' ? '决赛' : '初赛');
+      sideCards.forEach((card, seat) => { card.querySelector('[data-team]').textContent = replay.players[seat]; });
+      slider.max = replay.frames.length;
+      view.hidden = false;
+      colors = palette();
+      renderLegend();
+      render();
+    },
+    clear() {
+      pause();
+      replay = undefined;
+      view.hidden = true;
+    }
+  };
+})();
+</script>
+<script>
+(() => {
+  'use strict';
+  const byId = id => document.getElementById(id);
+  const list = byId('replay-list');
+  const status = byId('file-status');
+  let files = [];
+  let request = 0;
+
+  function showStatus(message, error = false) {
+    status.textContent = message;
+    status.toggleAttribute('data-error', error);
   }
 
   async function loadSelected() {
     const reading = ++request;
     const file = files[list.selectedIndex];
-    setReplay(null);
-    status.classList.remove('error');
+    replayPlayer.clear();
     if (!file) return;
-    status.textContent = '正在读取回放…';
+    showStatus('正在读取回放…');
     try {
-      const data = validate(JSON.parse(await file.text()));
+      const data = JSON.parse(await file.text());
       if (reading !== request) return;
-      setReplay(data);
-      status.textContent = '已加载 ' + file.name;
+      replayPlayer.load(data, file.name);
+      showStatus('');
     } catch (error) {
       if (reading !== request) return;
-      setReplay(null);
-      status.classList.add('error');
-      status.textContent = error instanceof SyntaxError ? '文件不是有效的 JSON。' : '无法打开回放。' + error.message;
+      replayPlayer.clear();
+      showStatus(error instanceof SyntaxError ? '文件不是有效的 JSON。' : '无法打开回放。' + error.message, true);
     }
   }
 
@@ -461,10 +540,9 @@ aside section { padding: 14px; }
       loadSelected();
     } else {
       ++request;
-      setReplay(null);
+      replayPlayer.clear();
       list.add(new Option('没有回放文件'));
-      status.classList.remove('error');
-      status.textContent = emptyMessage;
+      showStatus(emptyMessage);
     }
   }
 
@@ -481,31 +559,17 @@ aside section { padding: 14px; }
     return new Response(stream).text();
   }
 
-  function start() {
-    if (turn === replay.frames.length) seek(0);
-    timer = setInterval(() => {
-      seek(turn + 1);
-      if (turn === replay.frames.length) pause();
-    }, 1000 / Number(speed.value));
-    syncControls();
-  }
-
   for (const [button, field] of [['choose-folder', 'folder-input'], ['choose-files', 'files-input']]) {
     const input = byId(field);
     byId(button).addEventListener('click', () => input.click());
     input.addEventListener('change', () => openFiles(input));
   }
   list.addEventListener('change', loadSelected);
-  previous.addEventListener('click', () => { pause(); seek(turn - 1); });
-  next.addEventListener('click', () => { pause(); seek(turn + 1); });
-  timeline.addEventListener('input', () => { const target = Number(timeline.value); pause(); seek(target); });
-  play.addEventListener('click', () => timer === null ? start() : pause());
-  speed.addEventListener('change', () => { if (timer !== null) { pause(); start(); } });
 
   const indexedFiles = (globalThis.playerKitReplayIndex ?? []).map(([name, encoded]) => ({
     name, webkitRelativePath: 'replays/' + name, text: () => unpackReplay(encoded)
   }));
-  showFiles(indexedFiles, '暂无可自动加载的回放。');
+  showFiles(indexedFiles, '暂无可自动加载的回放，请选择回放文件夹或打开 JSON。');
 })();
 </script>
 </body>

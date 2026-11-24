@@ -1,12 +1,12 @@
 # 曝光领地 · 选手材料包（初赛）
 
-本地试打由 `engine/` 运行，包括 Bot 进程管理和 HTTP 通信。开发接口和构建适配按语言放在 `sdk/python/`、`sdk/cpp/` 和 `sdk/java/`。
+本地对战使用 `engine/`，由它管理 Bot 进程和 HTTP 通信。开发接口和构建适配按语言放在 `sdk/python/`、`sdk/cpp/` 和 `sdk/java/`。
 
-## 本地试打
+## 本地对战
 
-使用 Python 3.9 或以上版本。试打 C++ 需本机 CMake 3.16 或以上版本和 C++17 工具链。试打 Java 需本机 JDK 17 和 Maven。C++ 和 Java 会在临时目录构建，再以本机进程运行。
+使用 Python 3.9 或以上版本。运行 C++ Bot 还需要 CMake 3.16 或以上版本和 C++17 工具链，运行 Java Bot 还需要 JDK 17 和 Maven。C++ 和 Java 会在临时目录构建，再以本机进程运行。
 
-解压材料包后，在根目录按语言运行对应命令。试打为双方各启动一个进程，在 `127.0.0.1` 的不同端口提供 HTTP 服务。双方请求使用同一个 `run_id`，无需配置令牌。
+解压材料包后，在根目录按语言运行对应命令。本地引擎为双方各启动一个进程，在 `127.0.0.1` 的不同端口提供 HTTP 服务。双方请求使用同一个 `run_id`，无需配置令牌。
 
 ```sh
 python -m engine bots/my_bot_python
@@ -20,11 +20,13 @@ python -m engine bots/my_bot_java
 
 ## 查看回放
 
-直接在浏览器打开材料包根目录的 [replay.html](replay.html)。页面会自动列出 `replays/` 中随包提供的三场基准 Bot 对战，并载入列表第一场。试打结束后，刷新页面即可查看新回放。
+直接在浏览器打开材料包根目录的 [replay.html](replay.html)。页面会自动列出 `replays/` 中随包提供的三场基准 Bot 对战，并载入列表第一场。对局结束后，刷新页面即可查看新回放。
 
 从下拉列表切换对局，用播放、逐回合前后切换或进度条查看棋盘、得分、指令和事件。也可以点击 **选择回放文件夹** 或 **打开 JSON** 查看其他回放。
 
 ## 开发自己的 Bot
+
+在材料包根目录运行 `git -C bots clone "<本队仓库地址>"`。Git 会按本队的仓库名在 `bots/` 下创建目录，例如 `bots/team001`。
 
 将下表中一个模板目录的内容复制到本队仓库根目录，保留 UTF-8 的 `bot.json` 和 `README.md`，在 README 中说明策略、使用方法、依赖和代码来源。
 
@@ -34,12 +36,12 @@ python -m engine bots/my_bot_java
 | C++ | [my_bot_cpp](bots/my_bot_cpp/) | 在 `strategy.hpp` 实现 `Strategy` |
 | Java | [my_bot_java](bots/my_bot_java/) | 在根目录的 `Strategy.java` 实现策略 |
 
-从材料包根目录传入实际提交目录。
+从材料包根目录传入本队仓库的路径。下面以 `bots/team001` 为例。
 
 ```sh
-python -m engine ../my-bot --opponent bot001 --seed 42
+python -m engine bots/team001 --opponent bot001 --seed 42
 ```
 
 `--opponent` 可选 `bot001`（随机）、`bot002`（贪心）或 `bot003`（搜索）。用 `--seed` 更换地图。
 
-内置 Python Bot 只依赖标准库。自己的额外依赖在运行工具的 Python 环境中安装，例如 `python -m pip install -r ../my-bot/requirements.txt`。各语言的构建和提交文件说明见对应模板。
+内置 Python Bot 只依赖标准库。自己的额外依赖在运行工具的 Python 环境中安装，例如 `python -m pip install -r bots/team001/requirements.txt`。各语言的构建和提交文件说明见对应模板。

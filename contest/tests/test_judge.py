@@ -94,7 +94,6 @@ class JudgeTests(MatchFixture):
                     self.assertTrue(stored['attempts'][0]['issue'])
                     self.assertEqual(contest.rulings.pending(), {'pending': []})
                     self.assertIsNone(stored['result'])
-                    self.assertFalse(worker.submit_next())
                     self.assertFalse(worker.poll_next())
 
     @staticmethod
