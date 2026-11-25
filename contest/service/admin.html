@@ -168,7 +168,7 @@
     .replay-link { padding: 2px 8px; font-family: var(--mono); white-space: nowrap; }
     #match-replay {
       --replay-cell: #e6e8e3; --replay-defect: #3b4149; --replay-key: #f2c200;
-      --replay-station: #8546bd;
+      --replay-boost: #8546bd;
       scroll-margin-top: 112px;
     }
     .replay-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 24px; align-items: start; }
@@ -186,13 +186,13 @@
     .replay-controls button { padding: 5px 9px; }
     .replay-controls [aria-pressed="true"] { background: var(--accent); color: #15171a; border-color: var(--accent); }
     .replay-detail { padding: 6px 9px; border-left: 3px solid var(--line); background: var(--surface); font-size: 13px; }
-    #replay-station { border-color: var(--replay-station); }
+    #replay-boost { border-color: var(--replay-boost); }
     .replay-log { border-top: 1px solid var(--ink); }
     .replay-log h3 { margin: 6px 0 2px; font-size: 13px; }
     .replay-log ol { margin: 0; padding: 0; list-style: none; max-height: 224px; overflow-y: auto; font-size: 13px; }
     .replay-log li { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
     @media (prefers-color-scheme: dark) {
-      #match-replay { --replay-cell: #303437; --replay-defect: #737985; --replay-station: #c593ff; }
+      #match-replay { --replay-cell: #303437; --replay-defect: #737985; --replay-boost: #c593ff; }
     }
 
     @media (max-width: 800px) {
@@ -262,10 +262,10 @@
       <form id="manual-form">
         <div class="duel-grid">
           <div class="duel-cell team-a">
-            <label class="field">队伍 1<input id="manual-team-a" class="mono" type="text" pattern="team[0-9]{3}" placeholder="team001" autocomplete="off" required></label>
+            <label class="field">队伍 1<input id="manual-team-a" class="mono" type="text" pattern="team[0-9]{3}" placeholder="team003" autocomplete="off" required></label>
           </div>
           <div class="duel-cell team-b">
-            <label class="field">队伍 2<input id="manual-team-b" class="mono" type="text" pattern="team[0-9]{3}" placeholder="team002" autocomplete="off" required></label>
+            <label class="field">队伍 2<input id="manual-team-b" class="mono" type="text" pattern="team[0-9]{3}" placeholder="team001" autocomplete="off" required></label>
           </div>
         </div>
         <div class="duel-submit">
@@ -321,7 +321,7 @@
             <button type="button" data-speed="12" aria-pressed="true" aria-label="每秒 12 回合">12</button>
             <button type="button" data-speed="40" aria-pressed="false" aria-label="每秒 40 回合">40</button>
           </div>
-          <p class="replay-detail" id="replay-station"></p>
+          <p class="replay-detail" id="replay-boost"></p>
           <div class="replay-log"><h3>最近事件</h3><ol id="replay-events"></ol></div>
         </div>
       </div>
@@ -352,11 +352,11 @@
               </div>
               <div class="input-row" data-range>
                 <label class="field">起始编号<input name="team-start" class="mono" type="text" placeholder="team001" autocomplete="off" required></label>
-                <label class="field">结束编号<input name="team-end" class="mono" type="text" placeholder="team010" autocomplete="off" required></label>
+                <label class="field">结束编号<input name="team-end" class="mono" type="text" placeholder="team007" autocomplete="off" required></label>
               </div>
               <label class="field" data-list hidden>
                 队伍编号
-                <textarea name="teams" class="mono" rows="3" placeholder="team001, team004, team007" spellcheck="false" required disabled></textarea>
+                <textarea name="teams" class="mono" rows="3" placeholder="team001, team003, team004" spellcheck="false" required disabled></textarea>
               </label>
               <p class="muted" data-team-count hidden></p>
             </fieldset>

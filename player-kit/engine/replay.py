@@ -49,9 +49,11 @@ def write_replay_index(directory):
                 replay = json_object(raw)
             except (OSError, ValueError, RecursionError):
                 continue
+            board = replay.get('map')
             params = replay.get('params')
-            if (replay.get('version') == VERSION and replay.get('stage') == RULESET and isinstance(params, dict)
-                    and params.get('station_period') == PARAMS['station_period']):
+            if (replay.get('version') == VERSION and replay.get('stage') == RULESET
+                    and isinstance(params, dict) and params.get('max_turns') == PARAMS['max_turns']
+                    and isinstance(board, dict) and isinstance(board.get('boost_zones'), list)):
                 encoded = b64encode(compress(raw, mtime=0)).decode('ascii')
                 entries.append('  ' + dumps([path.name, encoded]))
 
@@ -76,8 +78,8 @@ class Recorder:
         self.data = {
             'version': VERSION,
             'source': 'practice',
-            'map': game.map,
-            'stage': game.stage,
+            'map': game.map.to_payload(),
+            'stage': game.map.stage,
             'players': [Path(submission).name, Path(opponent).name],
             'params': dict(PARAMS),
             'init': {'owner': owner, 'contour': contour, **board_status(game)},

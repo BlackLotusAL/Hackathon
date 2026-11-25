@@ -86,7 +86,8 @@ def make_server(*, runner_factory, port=None, host=None, name=None, quiet=True):
 
         def dispatch(self, run_id, kind, turn, msg):
             if kind == 'init':
-                if msg.get('stage') != RULESET:
+                board = msg.get('map')
+                if not isinstance(board, dict) or board.get('stage') != RULESET:
                     return 400, None
                 with lock:
                     if run_id in matches:

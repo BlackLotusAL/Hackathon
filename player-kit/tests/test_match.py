@@ -5,10 +5,13 @@ import unittest
 from unittest.mock import call, patch
 
 from engine import VERSION
+from engine.game import Game
 from engine.maps import generate
 from engine.match import play_match
+from engine.protocol import init_message, turn_message
 from engine.replay import write_replay_index
 from engine.rules import PARAMS
+from sdk import InitState, TurnState
 
 
 class ScriptedBot:
@@ -42,6 +45,21 @@ class ScriptedBot:
 
 
 class MatchTests(unittest.TestCase):
+    def test_strategy_shares_the_initialized_map_with_each_simulation(self):
+        game = Game(generate(104))
+        opening = init_message(game, 0)
+        self.assertEqual(set(opening), {'type', 'seat', 'max_turns', 'map'})
+        init = InitState.from_message(opening)
+        first = TurnState.from_message(init, turn_message(game))
+        game.step(('R', 'L'))
+        second = TurnState.from_message(init, turn_message(game))
+        self.assertIs(first.map, init.map)
+        self.assertIs(second.game.map, init.map)
+        self.assertIs(second.game.copy().map, init.map)
+        self.assertEqual(second.game.turn, game.turn)
+        self.assertEqual(second.game.trail, game.trail)
+        self.assertEqual(second.map.to_payload(), opening['map'])
+
     def record_match(self, bots):
         with TemporaryDirectory() as temporary:
             path = Path(temporary) / 'replays' / 'match.json'
@@ -110,10 +128,11 @@ class MatchTests(unittest.TestCase):
     def test_replay_index_only_lists_current_version(self):
         with TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            current = {'version': VERSION, 'stage': 'prelim', 'params': {'station_period': 100}}
+            current = {'version': VERSION, 'stage': 'prelim', 'params': PARAMS, 'map': generate(42)}
             for filename, data in (('current.json', current),
                                    ('unknown.json', dict(current, version='v2')),
                                    ('retired.json', dict(current, stage='final')),
+                                   ('rotating.json', dict(current, map={'boost_points': []})),
                                    ('unversioned.json', {}),
                                    ('invalid-params.json', dict(current, params=None))):
                 (directory / filename).write_text(json.dumps(data), encoding='utf-8')

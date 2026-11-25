@@ -1,12 +1,15 @@
 package bot;
 
 import bot.sdk.BoardTypes.Beam;
+import bot.sdk.BoardTypes.BoostZone;
 import bot.sdk.BoardTypes.Point;
+import bot.sdk.GameMap;
 import bot.sdk.InitState;
 import bot.sdk.TurnState;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 
 final class StateDecoder {
@@ -16,14 +19,23 @@ final class StateDecoder {
 
     static InitState init(JsonNode msg) {
         int seat = integer(msg.path("seat"));
-        if (seat < 0 || seat > 1 || !"prelim".equals(msg.path("stage").textValue())) {
+        int maxTurns = integer(msg.path("max_turns"));
+        if (seat < 0 || seat > 1 || maxTurns < 1) {
             throw new InvalidState();
         }
-        return new InitState(seat, integer(msg.path("size")), integer(msg.path("max_turns")),
-                text(msg.path("stage")), text(msg.path("map")),
-                list(msg.path("terrain"), StateDecoder::text),
-                pair(msg.path("calib"), StateDecoder::coordinates),
-                list(msg.path("boost_points"), StateDecoder::coordinates));
+        return new InitState(seat, maxTurns, map(msg.path("map")));
+    }
+
+    private static GameMap map(JsonNode value) {
+        String stage = text(value.path("stage"));
+        int size = integer(value.path("size"));
+        if (!"prelim".equals(stage) || size != 41) {
+            throw new InvalidState();
+        }
+        return new GameMap(text(value.path("id")), stage, size,
+                list(value.path("terrain"), StateDecoder::text),
+                pair(value.path("calib"), StateDecoder::coordinates),
+                list(value.path("boost_zones"), StateDecoder::boostZone));
     }
 
     static TurnState turn(JsonNode msg) {
@@ -50,6 +62,11 @@ final class StateDecoder {
     private static Point coordinates(JsonNode value) {
         List<Integer> xy = pair(value, StateDecoder::integer);
         return new Point(xy.get(0), xy.get(1));
+    }
+
+    private static BoostZone boostZone(JsonNode value) {
+        return new BoostZone(coordinates(value.path("marker")),
+                Set.copyOf(list(value.path("cells"), StateDecoder::coordinates)));
     }
 
     private static Beam beam(JsonNode value) {

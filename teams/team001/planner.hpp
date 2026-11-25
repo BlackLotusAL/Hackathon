@@ -13,9 +13,9 @@ class Planner {
 public:
     Planner(const bot_sdk::InitState& init, bool search)
         : init_(init), search_(search), unlimited_(std::getenv("ARENA_NO_BUDGET") != nullptr),
-          terrain_(Board::flatten(init.terrain)), neighbors_(init.size * init.size),
-          protected_(init.size * init.size) {
-        const int n = init.size;
+          terrain_(Board::flatten(init.map.terrain())), neighbors_(init.map.size() * init.map.size()),
+          protected_(init.map.size() * init.map.size()) {
+        const int n = init.map.size();
         for (int y = 0; y < n; ++y) {
             for (int x = 0; x < n; ++x) {
                 auto& adj = neighbors_[y * n + x];
@@ -25,7 +25,7 @@ public:
                 }
             }
         }
-        for (const auto& center : init.calib) {
+        for (const auto& center : init.map.calib()) {
             for (int y = center.y - 1; y <= center.y + 1; ++y) {
                 for (int x = center.x - 1; x <= center.x + 1; ++x) protected_[y * n + x] = 1;
             }
@@ -58,7 +58,7 @@ public:
             plan_.clear();
             return command(adjusted);
         }
-        const int steps = init_.move_steps(turn.turn, me.x, me.y);
+        const int steps = init_.map.move_steps(me.x, me.y);
         if (steps == 2 && (plan_.size() < 2 || plan_[1] != d)) plan_.clear();
         else plan_.erase(plan_.begin(), plan_.begin() + steps);
         return command(d);
@@ -99,7 +99,7 @@ private:
 
         static std::vector<int> enemy_times(const Board& b) {
             const auto& beam = b.turn.beams[1 - b.init.seat];
-            const auto& core = b.init.calib[1 - b.init.seat];
+            const auto& core = b.init.map.calib()[1 - b.init.seat];
             auto result = b.paths(beam.alive ? b.cell(beam.x, beam.y) : b.cell(core.x, core.y)).distance;
             const int speed = b.enemy_steps();
             for (int& value : result) {
@@ -130,7 +130,8 @@ private:
         if (d == (f.dir ^ 1)) return false;
         const auto& me = b.turn.beams[b.init.seat];
         int k = f.here;
-        for (int i = 0; i < b.init.move_steps(b.turn.turn, me.x, me.y); ++i) {
+        const int steps = b.init.map.move_steps(me.x, me.y);
+        for (int i = 0; i < steps; ++i) {
             k = b.neighbors[k][d];
             if (!b.passable(k) || b.contour[k] == b.own) return false;
         }

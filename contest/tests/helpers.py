@@ -22,6 +22,7 @@ from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 
+from engine.board import GameMap
 from engine.mapgen import generate
 from engine.protocol import dumps, json_object
 from judge.task import run_task
@@ -188,18 +189,22 @@ def http_bots(run_id):
             if self.path != f'/v1/matches/{run_id}/{action}':
                 return self.reply(400)
             if kind == 'init':
-                fields = {'type', 'seat', 'stage', 'map', 'size', 'max_turns', 'terrain', 'calib', 'boost_points'}
-                if (message.keys() != fields or message['seat'] != seat or message['stage'] != 'prelim'
+                fields = {'type', 'seat', 'map', 'max_turns'}
+                if (message.keys() != fields or message['seat'] != seat
                         or self.server.stage is not None):
                     return self.reply(400)
-                self.server.stage = message['stage']
+                try:
+                    board = GameMap.from_payload(message['map'])
+                except ValueError:
+                    return self.reply(400)
+                self.server.stage = board.stage
                 return self.reply(204)
             if self.server.stage is None:
                 return self.reply(404)
             if kind == 'end':
                 self.server.stage = None
                 return self.reply(204)
-            fields = {'type', 'turn', 'owner', 'contour', 'beams', 'active_station', 'score', 'lead_turns', 'time_us'}
+            fields = {'type', 'turn', 'owner', 'contour', 'beams', 'score', 'lead_turns', 'time_us'}
             if message.keys() != fields:
                 return self.reply(400)
             command = ('R', 'U', 'L', 'D')[((message['turn'] - 1) // 4) % 4] if seat == 0 else 'D'

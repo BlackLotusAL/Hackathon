@@ -1,4 +1,5 @@
 """Match state, territory capture, and turn settlement."""
+from .board import GameMap
 from .movement import move_beams
 from .rules import PARAMS, RULESET, compare_metrics
 from . import prelim
@@ -26,50 +27,35 @@ class Game(object):
 
     owner[k]  : -1 无主，0/1 归属
     trail[k]  : -1 无轮廓，0/1 谁的轮廓
-    time_us   : 双方累计响应时间（微秒），由裁判累加，用于单局最后一项指标比较（第 9.1 节）
+    time_us   : 双方累计响应时间（微秒），由裁判累加，用于单局最后一项指标比较
     """
 
-    def __init__(self, m, stage=None, max_turns=None):
-        N = self.N = m['size']
-        self.map = m
-        if (stage is not None and stage != RULESET) or m.get('stage', RULESET) != RULESET:
+    def __init__(self, board, stage=None, max_turns=None):
+        self.map = board if isinstance(board, GameMap) else GameMap.from_payload(board)
+        if (stage is not None and stage != RULESET) or self.map.stage != RULESET:
             raise ValueError('地图须使用当前赛题规则')
-        self.stage = RULESET
-        self.terrain = ''.join(m['terrain'])
-        NN = N * N
-        self.owner = [-1] * NN
-        self.trail = [-1] * NN
-        self.base = [-1] * NN
-        self.cores = [tuple(c) for c in m['calib']]
-        for s in (0, 1):
-            cx, cy = self.cores[s]
-            for dy in (-1, 0, 1):
-                for dx in (-1, 0, 1):
-                    k = (cy + dy) * N + cx + dx
-                    self.owner[k] = s
-                    self.base[k] = s
-        self.boost_points = [list(p) for p in m.get('boost_points', [])]
+        self.owner = list(self.map.base)
+        self.trail = [-1] * len(self.owner)
         self.lead_turns = [0, 0]
-        self.beams = [Beam(self.cores[0][0], self.cores[0][1], 'U'),
-                      Beam(self.cores[1][0], self.cores[1][1], 'D')]
+        self.beams = [Beam(*center, direction) for center, direction in zip(self.map.calib, ('U', 'D'))]
         self.turn = 0
         self.max_turns = max_turns or PARAMS['max_turns']
         self.done = False
         self.winner = None         # 0 / 1；未结束、双败或指标全同为 None
         self.reason = ''
         self.time_us = [0, 0]
-        self.total = sum(PARAMS['key_value'] if c == '*' else 1 for c in self.terrain if c != '#')
         self.events = []
 
     # ------------------------------------------------------------ 基本工具
     def idx(self, x, y):
-        return y * self.N + x
+        return y * self.map.size + x
 
     def inb(self, x, y):
-        return 0 <= x < self.N and 0 <= y < self.N
+        size = self.map.size
+        return 0 <= x < size and 0 <= y < size
 
     def val(self, k):
-        return PARAMS['key_value'] if self.terrain[k] == '*' else 1
+        return PARAMS['key_value'] if self.map.tiles[k] == '*' else 1
 
     def score(self, s):
         return prelim.score(self, s)
@@ -88,9 +74,9 @@ class Game(object):
     # ------------------------------------------------------------ 结算子过程
     def fill_cells(self, s):
         """s 在当前局面下闭合会得到的格：自己的全部轮廓格 + 被围住的格（不含基板缺陷和敌方校准区）。"""
-        N = self.N
+        N = self.map.size
         NN = N * N
-        owner, trail, terrain, base = self.owner, self.trail, self.terrain, self.base
+        owner, trail, terrain, base = self.owner, self.trail, self.map.tiles, self.map.base
         wall = [owner[k] == s or trail[k] == s for k in range(NN)]
         seen = [False] * NN
         st = []
@@ -118,7 +104,7 @@ class Game(object):
         scores = [self.score(s) for s in (0, 1)]
         if scores[0] != scores[1]:
             self.lead_turns[int(scores[1] > scores[0])] += 1
-        # 胜负（第 9 节）
+        # 胜负
         if self.turn >= self.max_turns:
             self.done = True
             self.winner, self.reason = self.decide()
@@ -131,7 +117,7 @@ class Game(object):
                 'lead_turns': list(self.lead_turns), 'time_us': list(self.time_us)}
 
     def decide(self):
-        """按规则第 9.1 节判胜，返回胜方出生点编号和胜负原因。"""
+        """返回胜方出生点编号和胜负原因。"""
         winner, metric = compare_metrics(self.metrics())
         reason = {'score': 'limit', 'time_us': 'time', None: 'tie'}.get(metric, metric)
         return winner, reason

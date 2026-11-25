@@ -1,9 +1,9 @@
-# team001 · 随机 · Python
+# team001 · 贪心 · C++
 
-本示例为 Python 随机策略，只使用标准库。相同地图和出生点可复现策略选择，设置 `ARENA_SEED` 可改变策略随机种子。
+本示例为 C++ 贪心策略。准备 Python 3.9 或以上版本、CMake 3.16 或以上版本及支持 C++17 的本机编译工具链。
 
-在项目的 `player-kit/` 目录使用 Python 3.9 或以上版本运行下面的命令。
+在项目的 `player-kit/` 目录运行下面的命令。工具会在本机编译并启动 Bot。
 
 ```sh
-python -m engine ../teams/team001
+python -m engine ../teams/team001 bot002
 ```

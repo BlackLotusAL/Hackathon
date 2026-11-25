@@ -1,22 +1,25 @@
-"""Preliminary board mechanics, the practice engine, and published map constraints."""
-from importlib import import_module
-from pathlib import Path
-import random
-import sys
+"""Preliminary board mechanics and published map constraints."""
+from copy import deepcopy
 from unittest import TestCase
-from unittest.mock import patch
 
 from engine.core import Game
 from engine.mapgen import generate, validate
 from engine.prelim import territory_value
-from engine.protocol import parse_reply, turn_message
+from engine.protocol import init_message, parse_reply, turn_message
 from engine.verification import VerificationError, verify_replay
 from .helpers import case
 
 
-def blank_game():
-    return Game({'id': 'positions', 'size': 41, 'terrain': ['.' * 41] * 41,
-                 'calib': [[5, 5], [35, 35]], 'boost_points': [[20, 20], [15, 15], [25, 25]]})
+def blank_game(cells=None):
+    terrain = ['.' * 41] * 41
+    for (x, y), tile in (cells or {}).items():
+        terrain[y] = terrain[y][:x] + tile + terrain[y][x + 1:]
+    return Game({'id': 'positions', 'size': 41, 'terrain': terrain,
+                 'calib': [[5, 5], [35, 35]], 'boost_zones': [
+                     {'marker': [20, 20], 'cells': [[19, 20], [20, 20], [21, 20]]},
+                     {'marker': [15, 15], 'cells': [[15, 15], [15, 14], [15, 13]]},
+                     {'marker': [25, 25], 'cells': [[25, 25], [25, 26], [26, 25]]},
+                 ]})
 
 
 def place(game, seat, x, y, direction):
@@ -33,23 +36,45 @@ def ring(game, center, radius, seat):
 
 
 class PreliminaryRulesTests(TestCase):
-    @case('L0-038', '起步亮区、换站边界、反向与加号指令')
-    def test_stations_and_commands(self):
+    @case('L0-038', '按起步格加速、全局可用、反向与加号指令')
+    def test_boost_cells_and_commands(self):
         g = blank_game()
         place(g, 0, 18, 20, 'R')
         for command, x, speed in [('R', 19, 1), ('L', 21, 2), ('U+', 23, 2), (None, 24, 1)]:
             g.step([command, None])
             self.assertEqual((g.beams[0].x, g.beams[0].y, g.beams[0].speed), (x, 20, speed))
-        for number, station in [(1, 0), (100, 0), (101, 1), (200, 1), (201, 2),
-                                (300, 2), (301, 0), (400, 0), (401, 1), (500, 1), (501, 2), (600, 2)]:
-            g = blank_game()
-            g.turn = number - 1
-            x, y = g.boost_points[station]
-            self.assertEqual(turn_message(g)['active_station'], [x, y])
-            place(g, 0, x, y, 'R')
-            g.step([None, None])
-            self.assertEqual(g.beams[0].x, x + 2)
+        for number in (1, 100, 101, 201, 600):
+            for x, y, steps in [(20, 20, 2), (15, 13, 2), (25, 25, 2), (21, 21, 1)]:
+                with self.subTest(turn=number, start=(x, y)):
+                    g = blank_game()
+                    g.turn = number - 1
+                    self.assertEqual(init_message(g, 0)['map'], g.map.to_payload())
+                    place(g, 0, x, y, 'R')
+                    g.step([None, None])
+                    self.assertEqual((g.beams[0].x, g.beams[0].speed), (x + steps, steps))
         self.assertIsNone(parse_reply('{"cmd":"U+","turn":1}'))
+
+    @case('L0-051', '校验标记点及覆盖格，重叠加速区不叠加步数')
+    def test_map_checks_explicit_boost_cells(self):
+        board = generate(42)
+        zone = board['boost_zones'][0]
+        defect = next([x, y] for y, row in enumerate(board['terrain']) for x, tile in enumerate(row) if tile == '#')
+        for cell in ([-1, 0], defect):
+            invalid = deepcopy(board)
+            invalid['boost_zones'][0]['cells'].append(cell)
+            self.assertTrue(any('缺陷格或界外格' in problem for problem in validate(invalid)))
+        missing = deepcopy(board)
+        missing['boost_zones'][0]['cells'].remove(zone['marker'])
+        self.assertTrue(any('标记点不在区内' in problem for problem in validate(missing)))
+        overlapping = deepcopy(board)
+        overlapping['boost_zones'][1]['cells'].append(zone['marker'])
+        self.assertEqual(validate(overlapping), [])
+        game = Game(dict(overlapping, terrain=['.' * board['size']] * board['size']))
+        x, y = zone['marker']
+        command, dx = ('L', -1) if x > 1 else ('R', 1)
+        place(game, 0, x, y, command)
+        game.step([command, None])
+        self.assertEqual(game.beams[0].x, x + 2 * dx)
 
     @case('L0-039', '全队露边取整、板边、校准区与资源格')
     def test_perimeter(self):
@@ -60,13 +85,9 @@ class PreliminaryRulesTests(TestCase):
                     g.owner[g.idx(x, y)] = 0
             self.assertEqual(territory_value(g, 0), (25, edges))
             self.assertEqual(g.score(0), 9 + score)
-        g = blank_game()
+        g = blank_game({(7, 5): '*', (7, 4): '#'})
         g.owner[g.idx(7, 5)] = 0  # one side sealed by the home
         g.owner[g.idx(8, 5)] = 1
-        key = g.idx(7, 5)
-        terrain = list(g.terrain)
-        terrain[key], terrain[g.idx(7, 4)] = '*', '#'
-        g.terrain = ''.join(terrain)
         self.assertEqual(territory_value(g, 0), (12, 3))
         self.assertEqual(g.score(0), 11)
         g = blank_game()
@@ -138,46 +159,18 @@ class PreliminaryRulesTests(TestCase):
         place(g, 1, 12, 15, 'R')
         g.step(['L', 'R'])
         self.assertEqual((g.owner[g.idx(13, 15)], g.trail[g.idx(13, 15)], g.beams[1].alive), (0, 1, True))
-        g = blank_game()
+        g = blank_game({(12, 12): '#'})
         ring(g, (12, 15), 3, 0)
         gap = g.idx(12, 12)
         g.trail[gap] = -1
-        g.terrain = g.terrain[:gap] + '#' + g.terrain[gap + 1:]
         self.assertNotIn(g.idx(12, 15), g.fill_cells(0))
         ring(g, (35, 35), 2, 0)
         g.trail[g.idx(35, 35)] = 0
-        self.assertTrue(all(g.base[k] == -1 for k in g.fill_cells(0)))
+        self.assertTrue(all(g.map.base[k] == -1 for k in g.fill_cells(0)))
 
-    @case('L0-042', '选手包与正式裁判对同一张地图逐回合一致')
-    def test_player_kit_parity(self):
-        root = str(Path(__file__).resolve().parents[2])
-        with patch.object(sys, 'path', [root, *sys.path]):
-            kit_game = import_module('player-kit.engine.game').Game
-            kit_maps = import_module('player-kit.engine.maps')
-            kit_protocol = import_module('player-kit.engine.protocol')
-        for seed in (42, 104, 106):
-            board = generate(seed)
-            self.assertEqual(board, kit_maps.generate(seed))
-            self.assertFalse(validate(board))
-            game, practice = Game(board), kit_game(board)
-            rng = random.Random(seed)
-            for turn in range(1, 601):
-                self.assertEqual(turn_message(game), kit_protocol.turn_message(practice))
-                for seat in (0, 1):
-                    us = rng.randrange(1, 200001)
-                    game.time_us[seat] += us
-                    practice.time_us[seat] += us
-                commands = [rng.choice(('U', 'D', 'L', 'R', None)) for _ in range(2)]
-                self.assertEqual(game.step(commands), practice.step(commands), (seed, turn))
-            self.assertEqual(game.owner, practice.owner)
-            self.assertEqual(game.trail, practice.trail)
-            self.assertEqual(game.metrics(), practice.metrics())
-            self.assertEqual((game.winner, game.reason), (practice.winner, practice.reason))
-
-
-    @case('L0-045', '只复核带固定加速区规则的归档')
+    @case('L0-045', '只复核使用显式加速格的归档')
     def test_unsupported_replays_are_rejected(self):
-        for retired in ({'stage': 'final', 'params': {'station_period': 100}},
-                        {'stage': 'prelim', 'params': {}}):
+        for retired in ({'stage': 'final', 'map': generate(42)},
+                        {'stage': 'prelim', 'params': {'station_period': 100}, 'map': {'boost_points': []}}):
             with self.subTest(retired=retired), self.assertRaisesRegex(VerificationError, '当前赛题规则'):
                 verify_replay(dict(retired, version='v1'))

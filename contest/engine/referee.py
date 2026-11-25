@@ -181,7 +181,7 @@ class Match:
 
         replay = recorder.finish()
         (self.out_dir / 'replay.json').write_text(dumps(replay), encoding='utf-8')
-        return dict(replay['result'], map=self.board['id'], stage=game.stage, players=self.names,
+        return dict(replay['result'], map=game.map.id, stage=game.map.stage, players=self.names,
                     errors=errors, run_id=self.run_id)
 
     def _turn(self, game, recorder, pool, log, errors):

@@ -5,5 +5,5 @@ Python 基准 Bot，随机选择安全移动。相同地图和出生点可复现
 在项目的 `player-kit/` 目录使用 Python 3.9 或以上版本运行下面的命令。
 
 ```sh
-python -m engine ../teams/bot001
+python -m engine ../teams/bot001 bot002
 ```

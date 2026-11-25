@@ -22,14 +22,14 @@ window.ContestReplay = (() => {
     respawn: () => '在校准区重启',
     end: () => '对局结束'
   };
-  let replay, owner, contour, terrain, colors;
+  let replay, owner, contour, terrain, boostCells, colors;
   let turn = 0;
   let speed = 12;
   let animation = 0;
   let last = 0;
 
   function validate(data) {
-    if (data?.version !== 'v1' || data.stage !== 'prelim' || data.params?.station_period !== 100) {
+    if (data?.version !== 'v1' || data.stage !== 'prelim') {
       throw new Error('回放须使用当前赛题规则');
     }
     const {map, init, frames, players, result} = data;
@@ -40,7 +40,7 @@ window.ContestReplay = (() => {
     const grid = (value, pattern) => typeof value === 'string' && value.length === size ** 2 && pattern.test(value);
     const state = record => pair(record?.beams) && record.beams.every(beam =>
       typeof beam?.alive === 'boolean' && Object.hasOwn(direction, beam.dir)) &&
-      counters(record.score) && counters(record.lead_turns) && counters(record.time_us) && coordinate(record.active_station);
+      counters(record.score) && counters(record.lead_turns) && counters(record.time_us);
     if (!Number.isInteger(size) || size < 1 || size > 128 || !Array.isArray(map.terrain) ||
         map.terrain.length !== size || !map.terrain.every(row => typeof row === 'string' && row.length === size && /^[.#*]+$/.test(row)) ||
         !pair(map.calib) || !map.calib.every(pair) || !pair(players) || !state(init) ||
@@ -48,11 +48,16 @@ window.ContestReplay = (() => {
         !Array.isArray(frames) || result?.turns !== frames.length || ![0, 1, null].includes(result.winner)) {
       throw new Error('回放数据不完整');
     }
-    if (!counters(result.lead_turns) || !counters(result.time_us) || !Number.isInteger(data.params.max_turns)) {
+    if (!counters(result.lead_turns) || !counters(result.time_us) || !Number.isInteger(data.params?.max_turns)) {
       throw new Error('回放缺少终局计分指标');
     }
-    if (!Array.isArray(map.boost_points) || map.boost_points.length !== 3 || !map.boost_points.every(coordinate)) {
-      throw new Error('回放缺少固定加速站');
+    const zones = map.boost_zones;
+    const passable = point => coordinate(point) && map.terrain[point[1]][point[0]] !== '#';
+    if (!Array.isArray(zones) || zones.length !== 3 || zones.some(zone => !passable(zone?.marker) ||
+        !Array.isArray(zone.cells) || !zone.cells.every(passable) ||
+        !zone.cells.some(([x, y]) => x === zone.marker[0] && y === zone.marker[1])) ||
+        new Set(zones.map(zone => zone.marker.join(','))).size !== zones.length) {
+      throw new Error('回放缺少有效的地图加速区');
     }
     if (frames.some((frame, index) => !state(frame) || frame.turn !== index + 1 ||
         !Array.isArray(frame.events) || !Array.isArray(frame.d) || frame.d.some(delta =>
@@ -60,6 +65,7 @@ window.ContestReplay = (() => {
           !['.', '0', '1'].includes(delta[1]) || !['.', '0', '1'].includes(delta[2])))) {
       throw new Error('回放帧无效');
     }
+    return new Set(zones.flatMap(zone => zone.cells.map(([x, y]) => y * size + x)));
   }
 
   function resetGrid() {
@@ -97,7 +103,7 @@ window.ContestReplay = (() => {
     const sides = [read('blue'), read('red')];
     return {surface, sides, exposed: sides.map(color => blend(color, surface, .72)),
       cell: read('replay-cell'), defect: read('replay-defect'), key: read('replay-key'),
-      station: read('replay-station')};
+      boost: read('replay-boost')};
   }
 
   function drawBoard(state) {
@@ -112,7 +118,6 @@ window.ContestReplay = (() => {
       context.fillStyle = color;
       context.fillRect(x, y, length, length);
     };
-    const station = state.active_station;
     fill(colors.surface, 0, 0, width);
     for (let index = 0; index < terrain.length; index += 1) {
       const x = (index % size) * cell + gap / 2;
@@ -125,8 +130,8 @@ window.ContestReplay = (() => {
         continue;
       }
       fill(seat === '.' ? colors.cell : colors.exposed[seat], x, y, length);
-      if (station && Math.abs(index % size - station[0]) <= 1 && Math.abs(Math.floor(index / size) - station[1]) <= 1) {
-        context.strokeStyle = colors.station;
+      if (boostCells.has(index)) {
+        context.strokeStyle = colors.boost;
         context.lineWidth = Math.max(1, cell * .14);
         context.strokeRect(x + cell * .1, y + cell * .1, length - cell * .2, length - cell * .2);
       }
@@ -163,7 +168,7 @@ window.ContestReplay = (() => {
 
   function renderLegend() {
     const items = [['蓝方图形区', colors.exposed[0]], ['红方图形区', colors.exposed[1]],
-      ['基板缺陷', colors.defect], ['关键图形区', colors.key], ['点亮的加速区', colors.station]];
+      ['基板缺陷', colors.defect], ['关键图形区', colors.key], ['加速区', colors.boost]];
     field('legend').replaceChildren(...items.map(([label, color]) => {
       const marker = document.createElement('i');
       marker.style.backgroundColor = color;
@@ -222,10 +227,6 @@ window.ContestReplay = (() => {
     const {winner, reason} = replay.result;
     const result = winner !== null ? sideNames[winner] + '获胜' : reason === 'double_loss' ? '双方判负' : '待裁定';
     field('result').textContent = turn === replay.frames.length ? result + (reasons[reason] ? ' · ' + reasons[reason] : '') : '';
-    const [x, y] = state.active_station;
-    const round = Math.min(turn + 1, replay.params.max_turns);
-    const station = Math.floor((round - 1) / replay.params.station_period) % 3;
-    field('station').textContent = '第 ' + round + ' 回合亮区 · ' + 'ABC'[station] + ' 站（' + x + ', ' + y + '）';
     renderEvents();
     syncPlayback();
   }
@@ -276,10 +277,12 @@ window.ContestReplay = (() => {
 
   return {
     load(data, label) {
-      validate(data);
+      const cells = validate(data);
       pause();
       replay = data;
       terrain = replay.map.terrain.join('');
+      boostCells = cells;
+      field('boost').textContent = '加速区整局可用 · 共 ' + cells.size + ' 格';
       resetGrid();
       field('match').textContent = label + ' · ' + replay.map.id + ' · ' + '初赛';
       sideCards.forEach((card, seat) => { card.querySelector('[data-team]').textContent = replay.players[seat]; });

@@ -59,9 +59,10 @@ class JudgeTests(MatchFixture):
                 self.assertFalse({'format', 'engine_version'} & document.keys())
             self.assertEqual(len(replay['frames']), 600)
             self.assertEqual(len(replay['observations']), 602)
-            self.assertEqual(replay['params']['station_period'], 100)
+            self.assertNotIn('station_period', replay['params'])
+            self.assertEqual(replay['map']['boost_zones'], json.loads(request['config']['map']['file'])['boost_zones'])
             self.assertEqual(set(replay['result']), {'turns', 'winner', 'reason', 'score', 'lead_turns', 'time_us'})
-            self.assertEqual(set(replay['init']), {'owner', 'contour', 'beams', 'active_station', 'score',
+            self.assertEqual(set(replay['init']), {'owner', 'contour', 'beams', 'score',
                                                   'lead_turns', 'time_us'})
             sealed = request['config']['map']
             map_file = self.root / f'{stage}.json'

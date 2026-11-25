@@ -5,5 +5,5 @@
 在材料包根目录运行下面的命令。
 
 ```sh
-python -m engine bots/my_bot_python --opponent bot003
+python -m engine my_bot_python bot003
 ```

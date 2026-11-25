@@ -22,11 +22,11 @@ final class Board {
 
     Board(InitState init) {
         this.init = init;
-        size = init.size();
+        size = init.map().size();
         count = size * size;
         own = (char) ('0' + init.seat());
         enemy = (char) ('0' + 1 - init.seat());
-        terrain = String.join("", init.terrain());
+        terrain = String.join("", init.map().terrain());
         neighbors = new int[count][4];
         protectedCells = new boolean[count];
         for (int k = 0; k < count; k++) {
@@ -35,7 +35,7 @@ final class Board {
                 neighbors[k][d] = x >= 0 && y >= 0 && x < size && y < size ? cell(x, y) : NONE;
             }
         }
-        for (var center : init.calib()) {
+        for (var center : init.map().calib()) {
             for (int y = center.y() - 1; y <= center.y() + 1; y++) {
                 for (int x = center.x() - 1; x <= center.x() + 1; x++) protectedCells[cell(x, y)] = true;
             }

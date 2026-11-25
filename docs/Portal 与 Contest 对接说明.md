@@ -101,7 +101,7 @@ curl -i 'http://127.0.0.1:8082/contest/v1/duels/duel-1901/result'
 | 单方获胜 | 胜方 `win`，负方 `loss` | `win` | 胜方编号 |
 | 整场双败 | 双方 `loss` | `double_loss` | `null` |
 
-同一场天梯的第一局最初使用 `run-7001.1`，因整局超时作废，最终生效的是 `run-7001.2`。第二局换边，首次执行 `run-7002.1` 生效。两局得分、奖励和领先回合数均相同，`team001` 都凭较短的累计响应时间获胜。
+同一场天梯的第一局最初使用 `run-7001.1`，因整局超时作废，最终生效的是 `run-7001.2`。第二局换边，首次执行 `run-7002.1` 生效。两局中双方得分与领先回合数均相同，`team001` 都凭较短的累计响应时间获胜。
 
 ```json
 {
@@ -280,11 +280,11 @@ Portal 展示单局赛果时，以查询响应 `games[].winner` 或初赛「对�
 
 ### 6.3 回放读取
 
-`replay.json` 的 `version` 为 `v1`，`stage` 为 `prelim`，`params.station_period` 为 100。`players` 为按出生点排列的显示名，参赛方身份以清单的 `bots[].team_id` 为准。地图包含尺寸 `size`、地形行 `terrain`、校准区中心 `calib` 和 A、B、C 三站中心 `boost_points`。坐标原点为左上角，x 向右、y 向下。地形用 `.`、`#`、`*` 分别标记普通格、缺陷与关键图形区。
+`replay.json` 的 `version` 为 `v1`，`stage` 为 `prelim`。`players` 为按出生点排列的显示名，参赛方身份以清单的 `bots[].team_id` 为准。地图包含尺寸 `size`、地形行 `terrain`、校准区中心 `calib` 和三个加速区 `boost_zones`。各区的 `marker` 为标记点，`cells` 为覆盖格列表，坐标均为 `[x, y]`。坐标原点为左上角，x 向右、y 向下。地形用 `.`、`#`、`*` 分别标记普通格、缺陷与关键图形区。播放器全程高亮 `cells` 标出的格子。
 
 1. 用 `init.owner` 和 `init.contour` 初始化归属和轮廓。两者均为按行展开的字符串。`.` 表示无主或无轮廓，`0` 和 `1` 表示出生点。
 2. 按 `frames[].turn` 播放。每帧的 `d` 以 `[格子编号, 归属, 轮廓]` 记录有变化的格。格子编号为 `y × size + x`。
-3. `init` 和 `frames` 按出生点提供 `beams`、`score`、`lead_turns` 和 `time_us`。`active_station` 给出下一回合的亮站中心，终局保留最后一站。帧中的 `cmds` 和 `events` 可用于展示命令和事件，可选的 `ms` 为该回合显示用时。终局指标取自 `result`。
+3. `init` 和 `frames` 按出生点提供 `beams`、`score`、`lead_turns` 和 `time_us`。帧中的 `cmds` 和 `events` 可用于展示命令和事件，可选的 `ms` 为该回合显示用时。终局指标取自 `result`。
 
 ### 6.4 可见性与公示
 

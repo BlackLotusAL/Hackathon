@@ -1,4 +1,4 @@
-"""Play one local match against a bundled baseline Bot."""
+"""Play one local match between two Bots."""
 import argparse
 from datetime import datetime
 from pathlib import Path
@@ -25,22 +25,30 @@ REASONS = {
 }
 
 
+def resolve_bot(argument):
+    directory = Path(argument).expanduser()
+    if argument == directory.name and not directory.is_dir():
+        directory = BOTS_DIR / argument
+    return directory.resolve()
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog='python -m engine', description='与基准 Bot 试打一局')
-    parser.add_argument('bot', type=Path, help='包含 bot.json 的提交目录')
-    parser.add_argument('--opponent', choices=['bot001', 'bot002', 'bot003'], default='bot002',
-                        help='基准 Bot，默认 bot002')
-    parser.add_argument('--seed', type=int, default=42, help='地图种子，默认 42')
+    parser = argparse.ArgumentParser(prog='python -m engine', description='在本地运行一局 Bot 对战')
+    bot_directory = '填写 bots/ 下的目录名或包含 bot.json 的目录路径'
+    parser.add_argument('p1', metavar='P1', help=f'第一个 Bot，{bot_directory}')
+    parser.add_argument('p2', metavar='P2', help=f'第二个 Bot，{bot_directory}')
+    parser.add_argument('--seed', type=int, help='整数地图种子。省略时随机选取')
     args = parser.parse_args(argv)
 
-    submission = args.bot.expanduser().resolve()
-    players = [submission.name, args.opponent]
     try:
+        p1 = resolve_bot(args.p1)
+        p2 = resolve_bot(args.p2)
+        players = [p1.name, p2.name]
         board = generate(args.seed)
         print(f'地图 {board["id"]} · {players[0]} 对 {players[1]}', flush=True)
         name = f'{datetime.now():%Y%m%d-%H%M%S}-{board["id"]}-{secrets.token_hex(4)}.json'
         replay_path = Path('replays') / name
-        game, errors = play_match(board, submission, BOTS_DIR / args.opponent, replay_path=replay_path)
+        game, errors = play_match(board, p1, p2, replay_path=replay_path)
     except (OSError, ValueError) as error:
         parser.exit(1, f'{error}\n')
     except KeyboardInterrupt:

@@ -3,7 +3,6 @@ import json
 import re
 
 from .rules import valid_command
-from .prelim import active_station
 
 MAX_REQUEST_BYTES = 65536
 MAX_RESPONSE_BYTES = 16384
@@ -22,17 +21,13 @@ def json_object(body):
 
 def init_message(game, seat):
     return {
-        'type': 'init', 'seat': seat, 'stage': game.stage, 'map': game.map['id'],
-        'size': game.N, 'max_turns': game.max_turns,
-        'terrain': list(game.map['terrain']),
-        'calib': [list(c) for c in game.cores],
-        'boost_points': [list(p) for p in game.boost_points],
+        'type': 'init', 'seat': seat, 'max_turns': game.max_turns, 'map': game.map.to_payload(),
     }
 
 
 def grid_rows(game):
     """owner / contour 两张网格，每行一个字符串。"""
-    N = game.N
+    N = game.map.size
     own, con = [], []
     for y in range(N):
         o, c = [], []
@@ -49,7 +44,6 @@ def grid_rows(game):
 def board_status(game):
     return {
         'beams': [b.to_dict(s) for s, b in enumerate(game.beams)],
-        'active_station': active_station(game.boost_points, min(game.turn + 1, game.max_turns)),
         **game.metrics(),
     }
 

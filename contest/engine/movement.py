@@ -6,7 +6,6 @@ from . import prelim
 def move_beams(game, cmds, ev):
     cut = [False, False]
     mv = [0, 0]
-    station = prelim.active_station(game.boost_points, game.turn)
     # 第 1 步 确定方向，以及走 1 格还是 2 格
     for s in (0, 1):
         b = game.beams[s]
@@ -15,7 +14,7 @@ def move_beams(game, cmds, ev):
         command = cmds[s]
         if command in DIRS and command != OPP[b.dir]:
             b.dir = command
-        b.speed = mv[s] = prelim.step_count(station, b.x, b.y)
+        b.speed = mv[s] = game.map.move_steps(b.x, b.y)
     for sub in (1, 2):
         movers = [s for s in (0, 1) if game.beams[s].alive and not cut[s] and mv[s] >= sub]
         if movers:
@@ -38,7 +37,7 @@ def move_beams(game, cmds, ev):
         b.respawn -= 1
         if b.respawn > 0:
             continue
-        cx, cy = game.cores[s]
+        cx, cy = game.map.calib[s]
         b.alive, b.x, b.y, b.dir, b.speed, b.respawn = True, cx, cy, ('U' if s == 0 else 'D'), 1, 0
         if game.trail[game.idx(cx, cy)] == 1 - s:      # 重新启动视为移入该格
             restart_cut[1 - s] = True
@@ -71,7 +70,7 @@ def _move_one_step(game, movers, cut, ev):
         b = game.beams[s]
         tx[s], ty[s] = b.x + DX[b.dir], b.y + DY[b.dir]
         moving[s] = True
-        if not game.inb(tx[s], ty[s]) or game.terrain[game.idx(tx[s], ty[s])] == '#':
+        if not game.inb(tx[s], ty[s]) or game.map.tiles[game.idx(tx[s], ty[s])] == '#':
             cut[s] = True
             moving[s] = False
             ev.append({'t': 'crash', 's': s})

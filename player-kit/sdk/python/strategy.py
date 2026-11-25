@@ -7,18 +7,16 @@ class StrategyRunner:
 
     def __init__(self, factory):
         self.factory = factory
-        self.init_message = None
         self.init = None
         self.strategy = None
 
     def handle(self, msg):
         kind = msg['type']
         if kind == 'init':
-            self.init_message = msg
             self.init = InitState.from_message(msg)
             self.strategy = self.factory(self.init)
         elif kind == 'turn':
-            state = TurnState.from_message(self.init, self.init_message, msg)
+            state = TurnState.from_message(self.init, msg)
             return {'turn': state.turn, 'cmd': self.strategy.act(state)}
         elif hasattr(self.strategy, 'end'):
             self.strategy.end(msg)

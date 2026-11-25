@@ -1,20 +1,8 @@
-"""Fixed-station preliminary rules shared by the judge and standalone player kit."""
+"""Preliminary scoring and simultaneous territory capture."""
 from functools import lru_cache
 
 
-STATION_PERIOD = 100
 TIEBREAK_METRICS = ('score', 'lead_turns', 'time_us')
-
-
-def active_station(points, turn):
-    """Centre of the station lit on the given one-based turn."""
-    if points and turn >= 1:
-        return points[((turn - 1) // STATION_PERIOD) % len(points)]
-    return None
-
-
-def step_count(center, x, y):
-    return 2 if center is not None and abs(x - center[0]) <= 1 and abs(y - center[1]) <= 1 else 1
 
 
 @lru_cache(maxsize=8)
@@ -28,11 +16,12 @@ def neighbors(size):
 def territory_value(game, side):
     face = edges = 0
     owner = game.owner
-    adjacent = neighbors(game.N)
+    adjacent = neighbors(game.map.size)
+    base = game.map.base
     for k, seat in enumerate(owner):
         if seat == side:
             face += game.val(k)
-            if game.base[k] != side:
+            if base[k] != side:
                 edges += 4 - sum(owner[n] == side for n in adjacent[k])
     return face, edges
 

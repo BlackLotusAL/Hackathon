@@ -289,9 +289,9 @@ Linux 宿主机使用 `/var/hackathon/archives` 作为持久化共享归档目�
 
 | 字段 | 含义 |
 | --- | --- |
-| `map`、`stage`、`players`、`params` | 地图、赛段标识 `prelim`、按出生点排列的双方和规则参数。`params.station_period` 为 100 |
+| `map`、`stage`、`players`、`params` | 地图、赛段标识 `prelim`、按出生点排列的双方和规则参数。`map.boost_zones` 按区记录标记点 `marker` 和覆盖格列表 `cells`，坐标采用 `[x, y]` |
 | `init` | 初始网格、束斑和得分 |
-| `frames` | 逐回合记录命令、束斑、下一回合亮站、决胜指标、事件和格子变化。可选的 `frames[].ms` 供界面显示 |
+| `frames` | 逐回合记录命令、束斑、决胜指标、事件和格子变化。可选的 `frames[].ms` 供界面显示 |
 | `result` | 终局结果及已结算回合数 |
 | `observations` | 所有已完成的单局必填，按原顺序记录裁判观测 |
 
@@ -366,7 +366,7 @@ Bot HTTP 接口通过路径前缀 `/v1` 标明协议版本。裁判分别向两�
 | `POST /v1/matches/{run_id}/turns/{turn}` | 200 毫秒内返回 `200` 和当前回合的 `turn`、`cmd`。超时、格式无效或连接失败记 1 次错误 |
 | `POST /v1/matches/{run_id}/end` | 时限 1 秒，超时或失败维持已确定的结果 |
 
-初赛回合消息的 `active_station` 为本回合点亮的加速站中心，`lead_turns`、`time_us` 为双方已累计的领先回合数和响应微秒数。初赛请求只接受一个方向字符 `U`、`D`、`L` 或 `R`，停机期间照常收集回复。格式正确的反向命令沿用原方向。
+初赛开局消息由 `type: "init"`、`seat`、`max_turns` 和 `map` 组成。`map` 与回放中的地图结构一致，包含 `id`、`stage`、`size`、`terrain`、`calib`、`boost_zones` 及可选的显示名称。从任一加速区覆盖格起步时，裁判沿同一方向结算最多两步。回合消息的 `lead_turns`、`time_us` 分别为双方已累计的领先回合数和响应微秒数。回合回复只接受一个方向字符 `U`、`D`、`L` 或 `R`，停机期间照常收集回复。格式正确的反向命令沿用原方向。
 
 本局累计 10 次错误或 Bot 自身退出均触发技术判负，因自身内存超限被终止按退出处理。由平台导致的容器启动失败或运行条件故障按第 3.3 节报告 `platform_error`。
 

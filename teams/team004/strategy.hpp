@@ -2,7 +2,7 @@
 
 #include "bot_sdk.hpp"
 
-#error "team007: intentional C++ build failure"
+#error "team004: intentional C++ build failure"
 
 class Strategy {
 public:

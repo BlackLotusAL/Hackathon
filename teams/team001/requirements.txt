@@ -1,1 +1,0 @@
-# Uses only the standard library and the official Arena SDK.

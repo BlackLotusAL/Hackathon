@@ -58,7 +58,7 @@ class Strategy(GreedyBot):
     # ---------------------------------------------------------------- 进攻
     def attack(self, st, f):
         g, s, en = st.game, st.seat, st.enemy
-        N = g.N
+        N = g.map.size
         dist, first = f['mine']
         if not en.alive or not (f['home'] or f['d_home'] + 1 < f['threat']):
             return None

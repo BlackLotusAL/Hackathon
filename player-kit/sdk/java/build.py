@@ -29,7 +29,7 @@ def build_bot(directory, workspace):
             shutil.copyfile(source, bot_sources / source.name)
     for name in ('Main.java', 'StateDecoder.java'):
         shutil.copyfile(sdk / name, bot_sources / name)
-    for name in ('BoardTypes.java', 'InitState.java', 'TurnState.java'):
+    for name in ('BoardTypes.java', 'GameMap.java', 'InitState.java', 'TurnState.java'):
         shutil.copyfile(sdk / name, sdk_sources / name)
     try:
         subprocess.run([maven, '--batch-mode', '--no-transfer-progress', '-DskipTests', 'package'],

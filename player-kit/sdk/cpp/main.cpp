@@ -6,6 +6,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string_view>
 
@@ -57,6 +58,10 @@ bot_sdk::Point read_point(std::istream& input) {
     return {read_int(input), read_int(input)};
 }
 
+bot_sdk::BoostZone read_boost_zone(std::istream& input) {
+    return {read_point(input), read_list(input, read_point)};
+}
+
 bot_sdk::Beam read_beam(std::istream& input) {
     const int seat = read_int(input);
     const auto position = read_point(input);
@@ -68,10 +73,13 @@ bot_sdk::Beam read_beam(std::istream& input) {
             read_int(input)};
 }
 
+bot_sdk::GameMap read_map(std::istream& input) {
+    return {read_int(input), read_text(input), read_text(input), read_list(input, read_text),
+            {read_point(input), read_point(input)}, read_list(input, read_boost_zone)};
+}
+
 bot_sdk::InitState read_init(std::istream& input) {
-    return {read_int(input), read_int(input), read_int(input), read_text(input), read_text(input),
-            read_list(input, read_text), {read_point(input), read_point(input)},
-            read_list(input, read_point)};
+    return {read_int(input), read_int(input), read_map(input)};
 }
 
 bot_sdk::TurnState read_turn(std::istream& input) {

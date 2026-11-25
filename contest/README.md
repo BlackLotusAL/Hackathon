@@ -124,7 +124,7 @@ BOT_HOST=127.0.0.1 BOT_PORT=18102 \
 .venv/bin/python -B -m engine verify-replay out/replay.json --log-file out/log.jsonl
 ```
 
-复核封存地图时加上 `--map-file` 和 `--map-sha256`。回放参数 `station_period` 标识当前规则，取值为 100。
+复核封存地图时加上 `--map-file` 和 `--map-sha256`。当前 `v1` 回放的 `map.boost_zones` 逐区记录标记点和覆盖格，所有覆盖格整局可用于加速。
 
 ## 构建裁判镜像
 
@@ -136,7 +136,7 @@ docker build --platform linux/amd64 -f contest/judge/Dockerfile -t exposure-judg
 
 ## 运行测试
 
-在 `contest/` 下运行全部 L0 核心用例。
+在 `contest/` 下运行 L0 核心用例。测试仅依赖此目录中的代码和 Python 标准库。
 
 ```sh
 .venv/bin/python -B -m tests

@@ -409,7 +409,7 @@ def review_archive(root, request, state, *, ladder):
         if version != VERSION:
             raise VerificationError(f'单局清单的版本不受支持（{version!r}）')
         board, digest = load_map(request['config']['map'])
-        check_fields(result, {'map': board['id'], 'map_sha256': digest}, 'match.json')
+        check_fields(result, {'map': board.id, 'map_sha256': digest}, 'match.json')
         replay = json_object((path / 'replay.json').read_bytes())
         log = read_referee_log(path / 'log.jsonl')
         game = verify_replay(replay, board=board, log=log)

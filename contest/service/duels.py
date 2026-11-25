@@ -38,7 +38,7 @@ def load_pools(path):
             raw = (path.parent / entry['file']).read_bytes().decode('utf-8')
             spec = {'file': raw, 'sha256': entry['sha256']}
             board, _ = load_map(spec, stage)
-            ids.add(board['id'])
+            ids.add(board.id)
             specs.append(spec)
         if len(ids) != len(entries):
             raise ValueError('正式地图编号重复')

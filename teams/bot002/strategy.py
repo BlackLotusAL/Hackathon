@@ -26,9 +26,9 @@ class Strategy:
         g, me = st.game, st.me
         if d == OPP[me.dir]:
             return False
-        for i in range(1, st.move_steps(me) + 1):
+        for i in range(1, st.map.move_steps(me.x, me.y) + 1):
             x, y = me.x + i * DX[d], me.y + i * DY[d]
-            if not g.inb(x, y) or g.terrain[g.idx(x, y)] == '#' or g.trail[g.idx(x, y)] == st.seat:
+            if not g.inb(x, y) or g.map.tiles[g.idx(x, y)] == '#' or g.trail[g.idx(x, y)] == st.seat:
                 return False
         return True
 
@@ -38,17 +38,18 @@ class Strategy:
         return next((d for d in DIRS if self.ok_step(st, d)), st.me.dir)
 
     def advance_plan(self, st, d):
-        steps = st.move_steps(st.me)
+        me = st.me
+        steps = st.map.move_steps(me.x, me.y)
         if self.plan[:steps] == [d] * steps:
             del self.plan[:steps]
         else:
-            self.plan.clear()  # 亮区内不能在两步之间转弯
+            self.plan.clear()  # 加速移动的两步沿同一方向
         return d
 
     def facts(self, st):
         """每回合都要用的量：回家距离、对手威胁（到我轮廓的最少回合数）。"""
         g, s, me, en = st.game, st.seat, st.me, st.enemy
-        N = g.N
+        N = g.map.size
         here = g.idx(me.x, me.y)
         f = {'home': g.owner[here] == s}
         mine = bfs(g, me.x, me.y, blocked=lambda k: g.trail[k] == s and k != here, first_ban=OPP[me.dir])
@@ -61,7 +62,7 @@ class Strategy:
                 if g.owner[k] == s and 0 < dist[k] < d_home:
                     d_home, home_dir = dist[k], first[k]
         f['d_home'], f['home_dir'] = d_home, home_dir
-        es = st.move_steps(en) if en.alive else 1
+        es = st.map.move_steps(en.x, en.y) if en.alive else 1
         f['es'] = es
         reach = enemy_reach(g, en, es)
         f['reach'] = reach
@@ -114,7 +115,7 @@ class Strategy:
     def remote_starts(self, st, f, n):
         """图形区边缘上离对手最远的几个出发点（20 步以内），返回 [(x, y, 到那里的路线)]。"""
         g, s, me = st.game, st.seat, st.me
-        N = g.N
+        N = g.map.size
         dist, first = f['mine']
         reach = f['reach']
         edge = []
@@ -123,7 +124,7 @@ class Strategy:
                 continue
             x, y = k % N, k // N
             if any(g.inb(x + DX[d], y + DY[d]) and g.owner[g.idx(x + DX[d], y + DY[d])] != s
-                   and g.terrain[g.idx(x + DX[d], y + DY[d])] != '#' for d in DIRS):
+                   and g.map.tiles[g.idx(x + DX[d], y + DY[d])] != '#' for d in DIRS):
                 edge.append((-(reach[k] - dist[k]), dist[k], k))
         edge.sort()
         out, used = [], []
@@ -154,7 +155,7 @@ class Strategy:
             return best
         # 没有可行的绕圈：走到图形区边缘的另一个位置
         dist, first = f['mine']
-        N = g.N
+        N = g.map.size
         cand = []
         for k in range(N * N):
             if g.owner[k] != s or dist[k] <= 0:
@@ -162,7 +163,7 @@ class Strategy:
             x, y = k % N, k // N
             for d in DIRS:
                 nx, ny = x + DX[d], y + DY[d]
-                if g.inb(nx, ny) and g.owner[g.idx(nx, ny)] != s and g.terrain[g.idx(nx, ny)] != '#':
+                if g.inb(nx, ny) and g.owner[g.idx(nx, ny)] != s and g.map.tiles[g.idx(nx, ny)] != '#':
                     cand.append((dist[k], k))
                     break
         cand.sort()
@@ -177,7 +178,7 @@ class Strategy:
         g, s = st.game, st.seat
         dist, first = f['mine']
         best, bd = INF, None
-        for k in range(g.N * g.N):
+        for k in range(g.map.size * g.map.size):
             if dist[k] <= 0:
                 continue
             if g.trail[k] == 1 - s:

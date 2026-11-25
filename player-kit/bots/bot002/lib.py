@@ -8,7 +8,7 @@ PERP = {'U': ('L', 'R'), 'D': ('L', 'R'), 'L': ('U', 'D'), 'R': ('U', 'D')}
 def bfs(g, x, y, blocked=None, first_ban=None):
     """从 (x, y) 出发的 4 邻接最短路。返回 (dist, first)：first[k] 为走向 k 的第一步方向。
     blocked(k) 为真的格不可走；first_ban 是第一步禁止的方向（不能掉头）。"""
-    N = g.N
+    N = g.map.size
     NN = N * N
     dist = [-1] * NN
     first = [None] * NN
@@ -16,7 +16,7 @@ def bfs(g, x, y, blocked=None, first_ban=None):
     dist[s0] = 0
     q = [s0]
     h = 0
-    terr = g.terrain
+    terr = g.map.tiles
     while h < len(q):
         c = q[h]; h += 1
         cx, cy = c % N, c // N
@@ -39,7 +39,7 @@ def bfs(g, x, y, blocked=None, first_ban=None):
 
 def path_to(first_dist, g, start, target):
     """沿 BFS 树从 start 走到 target 的方向序列（重新做一次带父指针的 BFS）。"""
-    N = g.N
+    N = g.map.size
     dist, _ = first_dist
     if dist[target] < 0:
         return None
@@ -67,7 +67,7 @@ def enemy_reach(g, e, speed):
         dist, _ = bfs(g, e.x, e.y)
         extra = 0
     else:
-        cx, cy = g.cores[e.seat]
+        cx, cy = g.map.calib[e.seat]
         dist, _ = bfs(g, cx, cy)
         extra = e.restart_in
     return [INF if d < 0 else extra + (d + speed - 1) // speed for d in dist]
@@ -75,7 +75,7 @@ def enemy_reach(g, e, speed):
 
 def trace(g, sx, sy, moves):
     """沿 moves 走，返回经过的格子（不含起点）；撞缺陷、出界或走回头路返回 None。"""
-    N = g.N
+    N = g.map.size
     x, y = sx, sy
     cells = []
     seen = {y * N + x}
@@ -84,7 +84,7 @@ def trace(g, sx, sy, moves):
         if x < 0 or y < 0 or x >= N or y >= N:
             return None
         k = y * N + x
-        if g.terrain[k] == '#' or k in seen:
+        if g.map.tiles[k] == '#' or k in seen:
             return None
         seen.add(k)
         cells.append(k)
@@ -103,7 +103,7 @@ def closure_gain(g, s, trail_cells):
             g.trail[k] = v
     gain, steal, got = 0, 0, []
     for k in cells:
-        if g.owner[k] == s or g.base[k] >= 0:
+        if g.owner[k] == s or g.map.base[k] >= 0:
             continue
         v = g.val(k)
         gain += v
@@ -116,7 +116,7 @@ def closure_gain(g, s, trail_cells):
 def loop_candidates(g, s, x, y, cur_dir, sizes, max_inner=30, big=False):
     """矩形绕圈候选：先在己方图形区内沿 d1 走到边缘，再走 d1×a、d2×b，然后沿最短路回家。
     逐个产出 (moves, 轮廓格列表, 图形区内的步数)。"""
-    N = g.N
+    N = g.map.size
     owner = g.owner
     for d1 in DIRS:
         if d1 == OPP[cur_dir]:

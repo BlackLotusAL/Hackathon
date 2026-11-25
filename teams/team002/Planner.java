@@ -60,7 +60,7 @@ final class Planner {
             clear();
             return command(adjusted);
         }
-        int steps = board.init.moveSteps(turn.turn(), me.x(), me.y());
+        int steps = board.init.map().moveSteps(me.x(), me.y());
         if (steps == 2 && (planIndex + 1 >= plan.length || plan[planIndex + 1] != d)) clear();
         else planIndex += steps;
         return command(d);
@@ -84,9 +84,9 @@ final class Planner {
             home = view.owner[here] == board.own;
             mine = board.paths(here, dir ^ 1, view.trail(board.own));
             var opponent = view.turn.beams().get(1 - board.init.seat());
-            var core = board.init.calib().get(1 - board.init.seat());
+            var core = board.init.map().calib().get(1 - board.init.seat());
             int start = opponent.alive() ? board.cell(opponent.x(), opponent.y()) : board.cell(core.x(), core.y());
-            enemySpeed = opponent.alive() ? board.init.moveSteps(view.turn.turn(), opponent.x(), opponent.y()) : 1;
+            enemySpeed = opponent.alive() ? board.init.map().moveSteps(opponent.x(), opponent.y()) : 1;
             enemy = board.paths(start, NONE, null).distance();
             homeDistance = home ? 0 : INF;
             for (int k = 0; k < board.count; k++) {
@@ -112,7 +112,7 @@ final class Planner {
         if (d == (f.dir ^ 1)) return false;
         var me = view.turn.beams().get(board.init.seat());
         int k = f.here;
-        for (int i = 0; i < board.init.moveSteps(view.turn.turn(), me.x(), me.y()); i++) {
+        for (int i = 0; i < board.init.map().moveSteps(me.x(), me.y()); i++) {
             k = board.neighbors[k][d];
             if (!board.passable(k) || view.contour[k] == board.own) return false;
         }

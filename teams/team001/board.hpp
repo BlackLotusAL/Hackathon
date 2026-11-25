@@ -50,7 +50,7 @@ struct Board {
     Board(const bot_sdk::InitState& init, const bot_sdk::TurnState& turn,
           const std::vector<std::array<int, 4>>& neighbors, const std::string& terrain,
           const Mask& protected_cells)
-        : init(init), turn(turn), size(init.size), count(size * size), own('0' + init.seat),
+        : init(init), turn(turn), size(init.map.size()), count(size * size), own('0' + init.seat),
           enemy('0' + (1 - init.seat)), terrain(terrain), owner(flatten(turn.owner)),
           contour(flatten(turn.contour)),
           neighbors(neighbors), protected_cells(protected_cells) {}
@@ -87,7 +87,7 @@ struct Board {
     int enemy_steps() const {
         const auto& beam = turn.beams[1 - init.seat];
         if (!beam.alive) return 1;
-        return init.move_steps(turn.turn, beam.x, beam.y);
+        return init.map.move_steps(beam.x, beam.y);
     }
 
     bool edge(int k) const {

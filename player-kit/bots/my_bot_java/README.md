@@ -5,7 +5,7 @@
 使用 Python 3.9 或以上版本、JDK 17 和 Maven。把 `mvn` 加入 PATH，并设置 `JAVA_HOME` 指向 JDK 或把 JDK 的 `bin/` 加入 PATH。首次构建由 Maven 下载依赖。在材料包根目录运行下面的命令。
 
 ```sh
-python -m engine bots/my_bot_java
+python -m engine my_bot_java bot002
 ```
 
-提交时将模板内容放到本队仓库根目录，保留 `bot.json`、`README.md`、`pom.xml` 和 `Strategy.java`。在 README 说明策略、依赖和代码来源，推送到 `main` 前，先用实际提交目录跑一局。
+提交时将模板内容放到本队仓库根目录，保留 `bot.json`、`README.md`、`pom.xml` 和 `Strategy.java`。在 README 说明策略、依赖和代码来源，推送到 `master` 前，先用实际提交目录跑一局。

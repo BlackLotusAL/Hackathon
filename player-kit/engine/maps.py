@@ -1,6 +1,6 @@
-"""随机地图生成器与地图约束校验（规则文档第 3 节）。
+"""随机地图生成器与地图约束校验。
 
-按规则文档第 3 节"每张地图都满足的约束"随机生成地图，用来练习和测试；validate() 逐条检查这些约束。
+按《赛题规则》的地图约束生成练习和测试地图，validate() 逐条检查这些约束。
 
 用法：
   m = maps.generate(42)                # 同一个种子总是得到同一张图；地图编号为 R42
@@ -10,11 +10,17 @@
 import random
 from collections import deque
 
-from .rules import RULESET
+from .board import GameMap
+from .rules import PARAMS, RULESET
 
-N = 41
+N = PARAMS['size']
 C = N - 1                      # 旋转中心：(x, y) <-> (C - x, C - y)
 STYLES = ('open', 'walls', 'lanes', 'blocks', 'mixed')
+BOOST_SHAPES = (
+    ((0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)),
+    tuple((x, y) for y in range(-1, 2) for x in range(-1, 2)),
+    ((0, -2), (0, -1), (-1, 0), (0, 0), (1, 0), (0, 1), (0, 2)),
+)
 
 
 def rot(x, y):
@@ -40,24 +46,14 @@ def near_calib(x, y, calib, r=4):
 
 
 # ---------------------------------------------------------------- 校验
-def _coordinate_lists(values, width):
-    return isinstance(values, (list, tuple)) and all(
-        isinstance(value, (list, tuple)) and len(value) == width and all(type(coord) is int for coord in value)
-        for value in values
-    )
-
-
 def validate(m):
-    """检查一张地图是否满足第 3 节的全部约束，返回错误列表（空列表表示通过）。"""
+    """检查地图是否满足《赛题规则》的地图约束，返回错误列表（空列表表示通过）。"""
+    try:
+        board = m if isinstance(m, GameMap) else GameMap.from_payload(m)
+    except ValueError as error:
+        return [str(error)]
     err = []
-    if m.get('stage', RULESET) != RULESET:
-        return ['地图须使用当前赛题规则']
-    t = m.get('terrain')
-    if (m.get('size') != N or not isinstance(t, (list, tuple)) or len(t) != N
-            or any(not isinstance(r, str) or len(r) != N for r in t)):
-        return ['尺寸不是 41×41']
-    if any(c not in '.#*' for r in t for c in r):
-        err.append('出现 . # * 以外的字符')
+    t = board.terrain
     for y in range(N):
         for x in range(N):
             if t[y][x] != t[C - y][C - x]:
@@ -65,12 +61,7 @@ def validate(m):
                 break
         if err and err[-1].startswith('不对称'):
             break
-    calib = m.get('calib')
-    if not _coordinate_lists(calib, 2) or len(calib) != 2:
-        return err + ['必须提供两个校准区中心']
-    c0, c1 = map(tuple, calib)
-    if any(not (1 <= x < N - 1 and 1 <= y < N - 1) for x, y in (c0, c1)):
-        return err + ['校准区出界']
+    c0, c1 = board.calib
     if rot(*c0) != c1:
         err.append('两个校准区不是 180° 旋转关系')
     if all(abs(a - b) <= 2 for a, b in zip(c0, c1)):
@@ -89,24 +80,17 @@ def validate(m):
                     err.append('校准区 (%d,%d) 周围 4 格内有缺陷 (%d,%d)' % (cx, cy, x, y))
                 elif inner and t[y][x] != '.':
                     err.append('校准区 3×3 内不是空白格 (%d,%d)' % (x, y))
-    bps = m.get('boost_points')
-    if not _coordinate_lists(bps, 2):
-        return err + ['加速站中心坐标无效']
-    if len(bps) != 3 or len(set(map(tuple, bps))) != 3:
-        err.append('加速站中心不是 3 个')
-    eq = [k for k in d0 if d0[k] == d1.get(k)]
-    dmin = min([d0[k] for k in eq] or [0])
-    for p in bps:
-        x, y = p
-        if not (0 <= x < N and 0 <= y < N) or t[y][x] == '#':
-            err.append('标记点 %s 在缺陷上或出界' % p)
-            continue
-        if near_calib(x, y, (c0, c1)):
-            err.append('标记点 %s 在校准区周围 4 格内' % p)
-        if d0.get((x, y)) != d1.get((x, y)):
-            err.append('标记点 %s 到双方路程不等' % p)
-        elif d0.get((x, y), 0) > dmin + 2:
-            err.append('标记点 %s 比最近的等距格远了 %d 步' % (p, d0[(x, y)] - dmin))
+    nearest = min((distance for cell, distance in d0.items() if distance == d1.get(cell)), default=0)
+    for number, zone in enumerate(board.boost_zones, 1):
+        marker = zone.marker
+        label = f'加速区 {number}'
+        if near_calib(*marker, board.calib):
+            err.append(f'{label}的标记点位于出生点周围 9×9 范围内')
+        distance = d0.get(marker)
+        if distance is None or distance != d1.get(marker):
+            err.append(f'{label}的标记点到双方出生点的路程不等或不可达')
+        elif distance > nearest + 2:
+            err.append(f'{label}的标记点距最近等距格的路程超过 2 步')
     return err
 
 
@@ -222,16 +206,18 @@ def _try(rng, stage):
     pts += rest[:3 - len(pts)]
     if len(pts) < 3:
         return None
-    pts = pts[:3]
-    if rng.random() < 0.6 and (20, 20) in pts:          # 多数地图的第一个标记点在正中央
-        pts.remove((20, 20))
-        pts.insert(0, (20, 20))
+    shape = rng.choice(BOOST_SHAPES)
+    zones = []
+    for x, y in pts[:3]:
+        candidates = [(x + dx, y + dy) for dx, dy in shape]
+        cells = [[a, b] for a, b in candidates if 0 <= a < N and 0 <= b < N and t[b][a] != '#']
+        zones.append({'marker': [x, y], 'cells': cells})
     return {'size': N, 'stage': stage, 'calib': [list(c) for c in calib], 'terrain': t,
-            'boost_points': [list(p) for p in pts], 'style': style}
+            'boost_zones': zones, 'style': style}
 
 
 def generate(seed=None, stage=RULESET):
-    """生成一张满足第 3 节全部约束的地图。seed 相同则地图相同；不给 seed 时随机选一个。"""
+    """生成符合《赛题规则》地图约束的地图。相同 seed 生成相同地图，省略 seed 时随机选取。"""
     if stage != RULESET:
         raise ValueError('此材料包适用初赛地图')
     if seed is None:
@@ -240,9 +226,10 @@ def generate(seed=None, stage=RULESET):
     rng = random.Random('arena-map-%d' % seed)
     for _ in range(100):
         m = _try(rng, stage)
-        if m and not validate(m):
+        if m:
             m.update({'id': 'R%d' % seed, 'name': '随机地图 %d' % seed, 'seed': seed})
-            return m
+            if not validate(m):
+                return m
     raise RuntimeError('种子 %d 生成失败' % seed)
 
 

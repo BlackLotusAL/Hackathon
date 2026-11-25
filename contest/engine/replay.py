@@ -4,11 +4,6 @@ from .protocol import board_status, grid_rows
 from .rules import PARAMS
 
 
-def replay_map(board):
-    keys = ('id', 'name', 'en', 'stage', 'size', 'calib', 'terrain', 'boost_points')
-    return {key: board[key] for key in keys if key in board}
-
-
 def game_result(game):
     return {'winner': game.winner, 'reason': game.reason, 'turns': game.turn, **game.metrics()}
 
@@ -39,8 +34,8 @@ class Recorder:
         initial = {'owner': owner, 'contour': contour, **board_status(game)}
         self.data = {
             'version': VERSION,
-            'map': replay_map(game.map),
-            'stage': game.stage,
+            'map': game.map.to_payload(),
+            'stage': game.map.stage,
             'players': list(players),
             'params': dict(PARAMS),
             'init': initial,

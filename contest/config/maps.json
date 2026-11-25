@@ -2,15 +2,15 @@
   "prelim": [
     {
       "file": "../maps/prelim/P01.json",
-      "sha256": "02d94d3c358913fe5e5e8ed8b363992762dc7a119e794ac0053f44d96e18b4b8"
+      "sha256": "a69741f4dff5be9f0cc8072e30ecaeb3a8964596afe45fdd7cc5e5f8fd8354e4"
     },
     {
       "file": "../maps/prelim/P02.json",
-      "sha256": "294e72e989ed74ec25659a0668434f19c59213a887dc18605d6b717c6ecce47f"
+      "sha256": "3b93e2c80ad0797356fc055651120a8f4927423291bfa4bee213ba6a188a1919"
     },
     {
       "file": "../maps/prelim/P03.json",
-      "sha256": "420f61c8cd29b1d9946fb3300e60a146799b2ca134a64d2a98dd7432c0f6ccaf"
+      "sha256": "4132722f9ab619b16866e73fe7248c930f85a0334be567513b114674a7a76481"
     }
   ]
 }

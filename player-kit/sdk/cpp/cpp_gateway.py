@@ -34,6 +34,10 @@ def point(value):
     return numbers(value.x, value.y)
 
 
+def boost_zone(value):
+    return point(value.marker) + sequence(value.cells, point)
+
+
 def beam(value):
     if value.dir not in ('U', 'D', 'L', 'R') or type(value.alive) is not bool:
         raise ValueError('invalid beam direction or alive flag')
@@ -42,12 +46,10 @@ def beam(value):
 
 
 def init_payload(state):
-    if state.seat not in (0, 1) or not 1 <= state.size <= 41:
-        raise ValueError('invalid seat or board size')
+    board = state.map
     return b''.join((
-        b'I\n', numbers(state.seat, state.size, state.max_turns), text(state.stage), text(state.map),
-        sequence(state.terrain, text), pair(state.calib, point),
-        sequence(state.boost_points, point),
+        b'I\n', numbers(state.seat, state.max_turns), numbers(board.size), text(board.stage), text(board.id),
+        sequence(board.terrain, text), pair(board.calib, point), sequence(board.boost_zones, boost_zone),
     ))
 
 
@@ -67,7 +69,6 @@ class NativeStrategy:
         self.process = None
         self.replies = None
         self.init = None
-        self.init_message = None
         self.closing = Event()
 
     def start(self):
@@ -144,11 +145,11 @@ class NativeStrategy:
             except Exception:
                 self.close()
                 raise
-            self.init, self.init_message = state, msg
+            self.init = state
         elif kind == 'turn':
             if self.process is None:
                 raise RuntimeError('native strategy is not initialized')
-            state = TurnState.from_message(self.init, self.init_message, msg)
+            state = TurnState.from_message(self.init, msg)
             return {'turn': state.turn, 'cmd': self.exchange(turn_payload(state))}
         else:
             self.close()

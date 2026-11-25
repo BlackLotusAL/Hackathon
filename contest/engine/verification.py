@@ -2,10 +2,11 @@
 import json
 
 from . import VERSION, mapgen
+from .board import GameMap
 from .adjudication import REQUEST_STATES, STARTUP_STATES, TIME_LIMIT_STATES, apply_startup, apply_turn
 from .core import Game
 from .protocol import json_object
-from .replay import Recorder, game_result, public_observation, replay_map
+from .replay import Recorder, game_result, public_observation
 from .rules import PARAMS, RULESET, valid_command
 
 
@@ -176,15 +177,17 @@ def _replay_game(replay, board):
         raise VerificationError(f'回放版本不受支持（{version!r}）')
     if replay.get('source') == 'practice':
         raise VerificationError('正式复核需要裁判回放')
-    if replay.get('stage') != RULESET or replay['params'].get('station_period') != PARAMS['station_period']:
+    recorded_map = replay.get('map')
+    if replay.get('stage') != RULESET or not isinstance(recorded_map, dict) or 'boost_zones' not in recorded_map:
         raise VerificationError('回放须使用当前赛题规则')
     if board is None:
-        board = replay['map']
-        if (not isinstance(board.get('id'), str) or not board['id']
-                or board.get('stage') != RULESET or mapgen.validate(board)):
+        board = GameMap.from_payload(recorded_map)
+        if recorded_map.get('stage') != RULESET or mapgen.validate(board):
             raise VerificationError('回放地图无效')
     else:
-        check_fields(replay['map'], replay_map(board), '回放地图')
+        if not isinstance(board, GameMap):
+            board = GameMap.from_payload(board)
+        check_fields(recorded_map, board.to_payload(), '回放地图')
     return Game(board)
 
 

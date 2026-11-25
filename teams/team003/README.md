@@ -1,9 +1,9 @@
-# team003 · 搜索 · Java
+# team003 · 轮廓回收 · Python
 
-本示例为 Java 搜索策略。入口 `Strategy.java` 和辅助文件 `Board.java`、`Planner.java` 均位于根目录。准备 Python 3.9 或以上版本、JDK 17 和 Maven。
+基于仓库的 Python SDK。在己方图形区内优先向外移动，离开后优先返回己方图形区以闭合轮廓。优先级相同时保持原方向。
 
-在项目的 `player-kit/` 目录运行下面的命令。工具会在本机编译并启动 Bot。
+使用 Python 3.9 或以上版本，无第三方依赖。在 `player-kit/` 目录运行下面的命令，预期完成 600 回合，退出码为 `0`。
 
 ```sh
-python -m engine ../teams/team003
+python -m engine ../teams/team003 bot002
 ```

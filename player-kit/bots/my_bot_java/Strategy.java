@@ -25,12 +25,12 @@ public final class Strategy {
                 }
                 int x = me.x(), y = me.y();
                 boolean safe = true;
-                int steps = init.moveSteps(state.turn(), x, y);
+                int steps = init.map().moveSteps(x, y);
                 for (int i = 0; i < steps; i++) {
                     x += DX[d];
                     y += DY[d];
-                    if (x < 0 || x >= init.size() || y < 0 || y >= init.size()
-                            || init.terrain().get(y).charAt(x) == '#' || state.contour().get(y).charAt(x) == '0' + init.seat()) {
+                    if (x < 0 || x >= init.map().size() || y < 0 || y >= init.map().size()
+                            || init.map().terrain().get(y).charAt(x) == '#' || state.contour().get(y).charAt(x) == '0' + init.seat()) {
                         safe = false;
                         break;
                     }

@@ -23,8 +23,8 @@ def generate_maps(args):
     for board in maps:
         defects = sum(row.count('#') for row in board['terrain'])
         keys = sum(row.count('*') for row in board['terrain'])
-        points = ' '.join('(%d,%d)' % tuple(point) for point in board['boost_points'])
-        print(f"{board['id']}  缺陷 {defects} 格  关键图形区 {keys} 格  加速标记点 {points}")
+        zones = '、'.join(f"{len(zone['cells'])} 格" for zone in board['boost_zones'])
+        print(f"{board['id']}  缺陷 {defects} 格  关键图形区 {keys} 格  加速区 {zones}")
         print(mapgen.draw(board) + '\n')
 
 
@@ -42,7 +42,10 @@ def verify_recording(args):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog='python -m engine', description='曝光领地规则引擎工具')
+    parser = argparse.ArgumentParser(
+        prog='python -m engine', description='曝光领地规则引擎工具',
+        epilog='选手本地对战请在 player-kit/ 目录运行 python -m engine P1 P2 [--seed SEED]。',
+    )
     commands = parser.add_subparsers(dest='command', required=True)
     maps = commands.add_parser('mapgen', help='生成天梯或测试用随机地图')
     maps.add_argument('--seed', type=int, default=None, help='起始种子；不填则随机')

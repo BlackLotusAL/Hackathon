@@ -1,9 +1,9 @@
-# team005 · 直行巡航 · C++
+# team005 · 非法指令 · Python
 
-基于仓库的 C++ SDK。按直行、右转、左转的顺序选择方向，避开边界、缺陷和己方轮廓。
+基于仓库的 Python SDK。Bot 正常就绪并完成初始化，每回合返回无效方向 `X`。SDK 返回 HTTP `500`，回放记为 `invalid`，累计 10 次触发技术判负。
 
-使用 Python 3.9 或以上版本、CMake 3.16 或以上版本和 C++17 工具链。在 `player-kit/` 目录运行下面的命令，预期完成 600 回合，退出码为 `0`。
+使用 Python 3.9 或以上版本，无第三方依赖。在 `player-kit/` 目录运行下面的命令，预期退出码为 `1`。
 
 ```sh
-python -m engine ../teams/team005
+python -m engine ../teams/team005 bot002
 ```
