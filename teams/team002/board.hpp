@@ -44,7 +44,6 @@ struct Board {
     const std::string& terrain;
     std::string owner;
     std::string contour;
-    std::string latent;
     const std::vector<std::array<int, 4>>& neighbors;
     const Mask& protected_cells;
 
@@ -53,7 +52,7 @@ struct Board {
           const Mask& protected_cells)
         : init(init), turn(turn), size(init.size), count(size * size), own('0' + init.seat),
           enemy('0' + (1 - init.seat)), terrain(terrain), owner(flatten(turn.owner)),
-          contour(flatten(turn.contour)), latent(flatten(turn.latent)),
+          contour(flatten(turn.contour)),
           neighbors(neighbors), protected_cells(protected_cells) {}
 
     static std::string flatten(const std::vector<std::string>& rows) {
@@ -66,6 +65,31 @@ struct Board {
     int value(int k) const { return terrain[k] == '*' ? 3 : 1; }
     int distance(int a, int b) const { return std::abs(a % size - b % size) + std::abs(a / size - b / size); }
     bool passable(int k) const { return k >= 0 && terrain[k] != '#'; }
+    int score_gain(const std::vector<int>& captured) const {
+        std::string projected = owner;
+        for (int k : captured) projected[k] = own;
+        std::array<int, 2> face{}, edges{};
+        for (int k = 0; k < count; ++k) {
+            if (projected[k] == '.') continue;
+            const int seat = projected[k] - '0';
+            face[seat] += value(k);
+            if (!protected_cells[k]) {
+                for (int n : neighbors[k]) {
+                    if (n < 0 || projected[n] != projected[k]) ++edges[seat];
+                }
+            }
+        }
+        const int seat = init.seat, other = 1 - seat;
+        return (face[seat] - edges[seat] / 3 - turn.score[seat])
+             - (face[other] - edges[other] / 3 - turn.score[other]);
+    }
+
+    int enemy_steps() const {
+        const auto& beam = turn.beams[1 - init.seat];
+        if (!beam.alive) return 1;
+        return init.move_steps(turn.turn, beam.x, beam.y);
+    }
+
     bool edge(int k) const {
         for (int next : neighbors[k]) {
             if (passable(next) && owner[next] != own) return true;
@@ -130,27 +154,6 @@ struct Board {
         return result;
     }
 
-    int disconnected_value(const std::vector<int>& captured_cells) const {
-        Mask blocked(count), seen(count);
-        for (int k : captured_cells) blocked[k] = 1;
-        const auto& core = init.calib[1 - init.seat];
-        const int start = cell(core.x, core.y);
-        std::vector<int> queue{start};
-        seen[start] = 1;
-        for (std::size_t i = 0; i < queue.size(); ++i) {
-            for (int next : neighbors[queue[i]]) {
-                if (next >= 0 && owner[next] == enemy && !blocked[next] && !seen[next]) {
-                    seen[next] = 1;
-                    queue.push_back(next);
-                }
-            }
-        }
-        int result = 0;
-        for (int k = 0; k < count; ++k) {
-            if (owner[k] == enemy && latent[k] == '.' && !blocked[k] && !seen[k]) result += value(k);
-        }
-        return result;
-    }
 };
 
 }  // namespace baseline

@@ -30,23 +30,15 @@ def pair(values, encode):
     return encode(left) + encode(right)
 
 
-def optional(value, encode):
-    return b'0\n' if value is None else b'1\n' + encode(value)
-
-
 def point(value):
     return numbers(value.x, value.y)
-
-
-def rect(value):
-    return numbers(value.x0, value.y0, value.x1, value.y1)
 
 
 def beam(value):
     if value.dir not in ('U', 'D', 'L', 'R') or type(value.alive) is not bool:
         raise ValueError('invalid beam direction or alive flag')
     return (numbers(value.seat, value.x, value.y) + text(value.dir)
-            + numbers(value.speed, int(value.alive), value.restart_in, value.boost_left))
+            + numbers(value.speed, int(value.alive), value.restart_in))
 
 
 def init_payload(state):
@@ -55,18 +47,16 @@ def init_payload(state):
     return b''.join((
         b'I\n', numbers(state.seat, state.size, state.max_turns), text(state.stage), text(state.map),
         sequence(state.terrain, text), pair(state.calib, point),
-        sequence(state.orders, rect), sequence(state.boost_points, point),
+        sequence(state.boost_points, point),
     ))
 
 
-def turn_payload(state, latent):
+def turn_payload(state):
     return b''.join((
         b'T\n', numbers(state.turn),
-        sequence(state.owner, text), sequence(state.contour, text), sequence(latent, text),
-        pair(state.beams, beam), pair(state.score, numbers), pair(state.bonus, numbers),
-        optional(state.order, lambda order: numbers(order.no) + rect(order.rect) + numbers(order.until)),
-        optional(state.boost, point),
-        optional(state.boost_next, lambda boost: numbers(boost.x, boost.y, boost.at)),
+        sequence(state.owner, text), sequence(state.contour, text),
+        pair(state.beams, beam), pair(state.score, numbers),
+        pair(state.lead_turns, numbers), pair(state.time_us, numbers),
     ))
 
 
@@ -159,7 +149,7 @@ class NativeStrategy:
             if self.process is None:
                 raise RuntimeError('native strategy is not initialized')
             state = TurnState.from_message(self.init, self.init_message, msg)
-            return {'turn': state.turn, 'cmd': self.exchange(turn_payload(state, msg.get('latent', ())))}
+            return {'turn': state.turn, 'cmd': self.exchange(turn_payload(state))}
         else:
             self.close()
         return None

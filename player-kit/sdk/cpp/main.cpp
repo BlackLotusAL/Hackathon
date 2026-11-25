@@ -57,10 +57,6 @@ bot_sdk::Point read_point(std::istream& input) {
     return {read_int(input), read_int(input)};
 }
 
-bot_sdk::Rect read_rect(std::istream& input) {
-    return {read_int(input), read_int(input), read_int(input), read_int(input)};
-}
-
 bot_sdk::Beam read_beam(std::istream& input) {
     const int seat = read_int(input);
     const auto position = read_point(input);
@@ -69,36 +65,24 @@ bot_sdk::Beam read_beam(std::istream& input) {
         throw std::runtime_error("invalid beam direction from gateway");
     }
     return {seat, position.x, position.y, direction[0], read_int(input), read_int(input) != 0,
-            read_int(input), read_int(input)};
+            read_int(input)};
 }
 
 bot_sdk::InitState read_init(std::istream& input) {
     return {read_int(input), read_int(input), read_int(input), read_text(input), read_text(input),
             read_list(input, read_text), {read_point(input), read_point(input)},
-            read_list(input, read_rect), read_list(input, read_point)};
+            read_list(input, read_point)};
 }
 
 bot_sdk::TurnState read_turn(std::istream& input) {
-    bot_sdk::TurnState state{
-        read_int(input), read_list(input, read_text), read_list(input, read_text), read_list(input, read_text),
-        {read_beam(input), read_beam(input)}, {read_int(input), read_int(input)}, {read_int(input), read_int(input)},
-        {}, {}, {}};
-    if (read_int(input)) {
-        state.order = bot_sdk::Order{read_int(input), read_rect(input), read_int(input)};
-    }
-    if (read_int(input)) {
-        state.boost = read_point(input);
-    }
-    if (read_int(input)) {
-        const auto point = read_point(input);
-        state.boost_next = bot_sdk::NextBoost{point.x, point.y, read_int(input)};
-    }
-    return state;
+    return {
+        read_int(input), read_list(input, read_text), read_list(input, read_text),
+        {read_beam(input), read_beam(input)}, {read_int(input), read_int(input)},
+        {read_int(input), read_int(input)}, {read_int(input), read_int(input)}};
 }
 
 bool valid_command(std::string_view cmd) {
-    return (cmd.size() == 1 || (cmd.size() == 2 && cmd[1] == '+'))
-        && std::string_view("UDLR").find(cmd[0]) != std::string_view::npos;
+    return cmd.size() == 1 && std::string_view("UDLR").find(cmd[0]) != std::string_view::npos;
 }
 
 void send_reply(std::FILE* pipe, std::string_view message) {

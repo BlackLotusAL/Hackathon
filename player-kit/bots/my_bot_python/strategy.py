@@ -28,8 +28,11 @@ class Strategy:
             self.steps = 0
             want = me.dir
         else:
-            self.steps += 1
-            want = LEFT[me.dir] if self.steps % SIDE == 0 else me.dir
+            self.steps += me.speed
+            want = me.dir
+            if self.steps >= SIDE:
+                self.steps = 0
+                want = LEFT[me.dir]
         order = [want] + [d for d in DIRS if d != want and d != OPP[me.dir]]
         for d in order:
             if self.safe(st, d):

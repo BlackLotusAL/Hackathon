@@ -6,6 +6,7 @@ import signal
 import socket
 import subprocess
 import sys
+import time
 from tempfile import TemporaryDirectory
 
 from sdk.cpp.build import build_bot as build_cpp
@@ -59,6 +60,17 @@ class ProcessBot(HttpBot):
         java = java_executable()
         jar = build_java(self.directory, workspace)
         return [java, '-cp', str(jar), 'bot.Main'], self.directory
+
+    def turn(self, run_id, msg, limit_s):
+        deadline = time.monotonic() + limit_s
+        reply = super().turn(run_id, msg, limit_s)
+        if reply[1] == 'connection':
+            # The socket can close before Windows signals process termination.
+            try:
+                self.proc.wait(timeout=max(0, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                pass
+        return reply
 
     def exited(self):
         return self.proc is not None and self.proc.poll() is not None

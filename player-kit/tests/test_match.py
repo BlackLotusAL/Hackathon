@@ -92,11 +92,30 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(replay['observations'][-1], {'phase': 'end', 'reason': 'errors'})
         self.assertTrue(all(bot.closed for bot in bots))
 
+    def test_simultaneous_process_exit_stops_before_settling_the_request(self):
+        with TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'bot.json').write_text('{"language":"python"}', encoding='utf-8')
+            (root / 'README.md').write_text('Exit on turn three.', encoding='utf-8')
+            (root / 'requirements.txt').touch()
+            (root / 'strategy.py').write_text(
+                'import os\nclass Strategy:\n'
+                '    def __init__(self, state): pass\n'
+                '    def act(self, state):\n'
+                '        if state.turn == 3: os._exit(1)\n'
+                '        return state.me.dir\n', encoding='utf-8')
+            game, _ = play_match(generate(42), root, root)
+            self.assertEqual((game.turn, game.reason, game.winner), (2, 'double_loss', None))
+
     def test_replay_index_only_lists_current_version(self):
         with TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            for filename, data in (('current.json', {'version': VERSION}),
-                                   ('unknown.json', {'version': 'v2'}), ('unversioned.json', {})):
+            current = {'version': VERSION, 'stage': 'prelim', 'params': {'station_period': 100}}
+            for filename, data in (('current.json', current),
+                                   ('unknown.json', dict(current, version='v2')),
+                                   ('retired.json', dict(current, stage='final')),
+                                   ('unversioned.json', {}),
+                                   ('invalid-params.json', dict(current, params=None))):
                 (directory / filename).write_text(json.dumps(data), encoding='utf-8')
             write_replay_index(directory)
             listing = (directory / 'index.js').read_text(encoding='utf-8').partition(' = ')[2]

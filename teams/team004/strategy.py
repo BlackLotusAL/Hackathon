@@ -18,10 +18,12 @@ class Strategy:
         for direction in DIRS:
             if direction == OPP[me.dir]:
                 continue
-            x, y = me.x + DX[direction], me.y + DY[direction]
-            if (not (0 <= x < self.init.size and 0 <= y < self.init.size)
-                    or self.init.terrain[y][x] == '#' or state.contour[y][x] == own):
+            path = [(me.x + i * DX[direction], me.y + i * DY[direction])
+                    for i in range(1, state.move_steps(me) + 1)]
+            if any(not (0 <= x < self.init.size and 0 <= y < self.init.size)
+                   or self.init.terrain[y][x] == '#' or state.contour[y][x] == own for x, y in path):
                 continue
+            x, y = path[-1]
             next_cell_owned = state.owner[y][x] == own
             priority = (next_cell_owned == wants_owned_cell, direction == me.dir)
             if best_priority is None or priority > best_priority:

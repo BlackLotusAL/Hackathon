@@ -1,19 +1,16 @@
 """Recompute formal results and verify the replay and referee evidence."""
 import json
-import re
 
 from . import VERSION, mapgen
-from .core import (Game, PARAMS, REQUEST_STATES, STARTUP_STATES, TIME_LIMIT_STATES,
-                   apply_startup, apply_turn)
+from .adjudication import REQUEST_STATES, STARTUP_STATES, TIME_LIMIT_STATES, apply_startup, apply_turn
+from .core import Game
 from .protocol import json_object
 from .replay import Recorder, game_result, public_observation, replay_map
+from .rules import PARAMS, RULESET, valid_command
 
 
 class VerificationError(ValueError):
     pass
-
-
-COMMAND = re.compile(r'[UDLR]\+?')
 
 
 def _json(value):
@@ -43,6 +40,13 @@ def _pair(value, field):
     if not isinstance(value, list) or len(value) != 2:
         raise VerificationError(f'{field} 必须按出生点提供两项')
     return value
+
+
+def _check_snapshot(recorded, expected, source):
+    check_fields(recorded, {k: v for k, v in expected.items() if k != 'beams'}, source)
+    beams = _pair(recorded.get('beams'), source + ' beams')
+    for seat, (actual, beam) in enumerate(zip(beams, expected['beams'])):
+        check_fields(actual, beam, f'{source} 的 {seat} 号束斑')
 
 
 def _exit_flags(observation):
@@ -113,7 +117,9 @@ def _turn_observation(observation, turn):
 def _commands(values, statuses, source):
     commands = _pair(values, source + ' cmds')
     for status, command in zip(statuses, commands):
-        valid = isinstance(command, str) and COMMAND.fullmatch(command) if status == 'ok' else command == ''
+        valid = command == ''
+        if status == 'ok':
+            valid = valid_command(command)
         if not valid:
             raise VerificationError(f'{source} 的命令与请求状态不符')
     return commands
@@ -152,7 +158,7 @@ def _recompute(recorder, frames, observations, log):
             raise VerificationError(f'{frame_source} 的命令与裁判日志不符')
         events = game.step([command or None for command in commands])
         expected = recorder.record(commands, events)
-        check_fields(frame, expected, frame_source)
+        _check_snapshot(frame, expected, frame_source)
         _check_log_fields(entry, {'errors': errors, 'score': expected['score'], 'events': events}, log_source)
 
     if not game.done or len(frames) != game.turn:
@@ -170,17 +176,16 @@ def _replay_game(replay, board):
         raise VerificationError(f'回放版本不受支持（{version!r}）')
     if replay.get('source') == 'practice':
         raise VerificationError('正式复核需要裁判回放')
-    stage = replay['stage']
-    if stage not in ('prelim', 'final'):
-        raise VerificationError('回放赛段无效')
+    if replay.get('stage') != RULESET or replay['params'].get('station_period') != PARAMS['station_period']:
+        raise VerificationError('回放须使用当前赛题规则')
     if board is None:
         board = replay['map']
         if (not isinstance(board.get('id'), str) or not board['id']
-                or board.get('stage') != stage or mapgen.validate(board)):
+                or board.get('stage') != RULESET or mapgen.validate(board)):
             raise VerificationError('回放地图无效')
     else:
-        check_fields(replay, {'map': replay_map(board), 'stage': board['stage']}, '回放')
-    return Game(board, stage=stage)
+        check_fields(replay['map'], replay_map(board), '回放地图')
+    return Game(board)
 
 
 def verify_replay(replay, *, board=None, log=None):
@@ -192,7 +197,7 @@ def verify_replay(replay, *, board=None, log=None):
             raise VerificationError('回放中的 Bot 名称须为字符串')
         recorder = Recorder(game, players)
         check_fields(replay, {'params': recorder.data['params']}, '回放')
-        check_fields(replay['init'], recorder.data['init'], '回放初始局面')
+        _check_snapshot(replay['init'], recorder.data['init'], '回放初始局面')
 
         frames = replay['frames']
         if not isinstance(frames, list):

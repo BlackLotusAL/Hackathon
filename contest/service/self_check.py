@@ -4,12 +4,14 @@ from time import monotonic
 from urllib.parse import urlsplit
 from uuid import uuid4
 
-from engine.core import Game, PARAMS
+from engine.adjudication import TIME_LIMIT_STATES
+from engine.core import Game
+from engine.rules import PARAMS, RULESET
 from engine.mapgen import generate
 from engine.protocol import end_message, init_message, turn_message
 from engine.referee import HttpBot
 
-from .domain import BATTLE_RULES, ContestError
+from .domain import ContestError
 
 
 TRIAL_TURNS = 60
@@ -33,11 +35,13 @@ def _http_detail(status, code):
 
 
 def _trial(bot, run_id, game, record):
-    errors, total_us = 0, 0
+    errors = 0
     for turn in range(TRIAL_TURNS):
         command, status, _, elapsed_us = bot.turn(run_id, turn_message(game), PARAMS['turn_ms'] / 1000)
         errors += status != 'ok'
-        total_us += elapsed_us
+        if status in TIME_LIMIT_STATES:
+            elapsed_us = PARAMS['turn_ms'] * 1000
+        game.time_us[0] += elapsed_us
         if turn == 0:
             record('回合响应', 'ok' if status == 'ok' else 'fail', command or _http_detail(status, 0))
         if errors and (turn == 0 or errors >= PARAMS['max_errors']):
@@ -45,15 +49,15 @@ def _trial(bot, run_id, game, record):
             break
         game.step((command, None))
 
-    mean_ms = total_us / (turn + 1) / 1000
+    mean_ms = game.time_us[0] / (turn + 1) / 1000
     level = 'fail' if errors else 'warn' if mean_ms > PARAMS['turn_ms'] * 0.7 else 'ok'
     record('试打 60 回合', level, f'{game.turn} 回合，错误 {errors} 次，平均 {mean_ms:.1f} 毫秒')
 
 
 def check_bot(body):
     rules, target = body.get('rules'), body.get('target')
-    if body.keys() != {'rules', 'target'} or rules not in BATTLE_RULES:
-        raise ContestError(400, 'INVALID_RULES', '请选择初赛或决赛规则并填写 Bot 地址')
+    if body.keys() != {'rules', 'target'} or rules != RULESET:
+        raise ContestError(400, 'INVALID_RULES', '请使用当前赛题规则（prelim）并填写 Bot 地址')
     if not isinstance(target, str) or not target.strip():
         raise ContestError(400, 'INVALID_CHECK_TARGET', '请填写 Bot 服务地址')
     target = target.strip()
@@ -72,7 +76,7 @@ def check_bot(body):
     record('启动就绪', 'ok', f'{monotonic() - started:.2f} 秒就绪')
 
     run_id = f'run-{uuid4().int}.1'
-    game = Game(generate(42, stage=rules), stage=rules, max_turns=TRIAL_TURNS)
+    game = Game(generate(42))
     try:
         status, code, _, _ = bot.post(run_id, 'init', init_message(game, 0), PARAMS['init_ms'] / 1000)
         record('开局请求', 'ok' if status == 'ok' else 'fail', _http_detail(status, code))

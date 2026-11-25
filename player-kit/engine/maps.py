@@ -10,6 +10,8 @@
 import random
 from collections import deque
 
+from .rules import RULESET
+
 N = 41
 C = N - 1                      # 旋转中心：(x, y) <-> (C - x, C - y)
 STYLES = ('open', 'walls', 'lanes', 'blocks', 'mixed')
@@ -48,6 +50,8 @@ def _coordinate_lists(values, width):
 def validate(m):
     """检查一张地图是否满足第 3 节的全部约束，返回错误列表（空列表表示通过）。"""
     err = []
+    if m.get('stage', RULESET) != RULESET:
+        return ['地图须使用当前赛题规则']
     t = m.get('terrain')
     if (m.get('size') != N or not isinstance(t, (list, tuple)) or len(t) != N
             or any(not isinstance(r, str) or len(r) != N for r in t)):
@@ -85,40 +89,24 @@ def validate(m):
                     err.append('校准区 (%d,%d) 周围 4 格内有缺陷 (%d,%d)' % (cx, cy, x, y))
                 elif inner and t[y][x] != '.':
                     err.append('校准区 3×3 内不是空白格 (%d,%d)' % (x, y))
-    orders = m.get('orders')
-    if not _coordinate_lists(orders, 4):
-        return err + ['订单区域坐标无效']
-    if not 6 <= len(orders) <= 8 or len(orders) % 2:
-        err.append('订单区域数量 %d 不在 6～8 或不是偶数' % len(orders))
-    for i, r in enumerate(orders):
-        x0, y0, x1, y1 = r
-        if x1 - x0 != 5 or y1 - y0 != 5 or x0 < 0 or y0 < 0 or x1 >= N or y1 >= N:
-            err.append('订单 %d 不是基板内的 6×6 区域' % (i + 1))
-            continue
-        if i % 2 == 1:
-            p = orders[i - 1]
-            if [C - p[2], C - p[3], C - p[0], C - p[1]] != list(r):
-                err.append('订单 %d 不是订单 %d 的旋转' % (i + 1, i))
-        if sum(1 for y in range(y0, y1 + 1) for x in range(x0, x1 + 1) if t[y][x] != '#') < 18:
-            err.append('订单 %d 缺陷过多' % (i + 1))
     bps = m.get('boost_points')
     if not _coordinate_lists(bps, 2):
-        return err + ['道具刷新点坐标无效']
+        return err + ['加速站中心坐标无效']
     if len(bps) != 3 or len(set(map(tuple, bps))) != 3:
-        err.append('道具刷新点不是 3 个')
-    eq = [k for k in d0 if d0[k] == d1.get(k) and not near_calib(k[0], k[1], (c0, c1))]
+        err.append('加速站中心不是 3 个')
+    eq = [k for k in d0 if d0[k] == d1.get(k)]
     dmin = min([d0[k] for k in eq] or [0])
     for p in bps:
         x, y = p
         if not (0 <= x < N and 0 <= y < N) or t[y][x] == '#':
-            err.append('刷新点 %s 在缺陷上或出界' % p)
+            err.append('标记点 %s 在缺陷上或出界' % p)
             continue
         if near_calib(x, y, (c0, c1)):
-            err.append('刷新点 %s 在校准区周围 4 格内' % p)
+            err.append('标记点 %s 在校准区周围 4 格内' % p)
         if d0.get((x, y)) != d1.get((x, y)):
-            err.append('刷新点 %s 到双方路程不等' % p)
+            err.append('标记点 %s 到双方路程不等' % p)
         elif d0.get((x, y), 0) > dmin + 2:
-            err.append('刷新点 %s 比最近的等距格远了 %d 步' % (p, d0[(x, y)] - dmin))
+            err.append('标记点 %s 比最近的等距格远了 %d 步' % (p, d0[(x, y)] - dmin))
     return err
 
 
@@ -211,30 +199,13 @@ def _try(rng, stage):
             g[y][x] = '*'
         kc += len(cells)
     t = [''.join(r) for r in g]
-    # 订单：成对的 6×6 区域
-    orders, tries = [], 0
-    pairs = rng.choice((3, 3, 4))
-    while len(orders) < pairs * 2 and tries < 500:
-        tries += 1
-        x0, y0 = rng.randint(0, N - 6), rng.randint(0, N - 6)
-        r = [x0, y0, x0 + 5, y0 + 5]
-        rr = [C - r[2], C - r[3], C - r[0], C - r[1]]
-        if r == rr or abs(x0 - rr[0]) < 6 and abs(y0 - rr[1]) < 6:
-            continue                                   # 与自己的旋转重叠
-        if any(abs(x0 - o[0]) < 4 and abs(y0 - o[1]) < 4 for o in orders):
-            continue
-        if any(near_calib(x, y, calib, 1) for x in range(r[0], r[2] + 1) for y in range(r[1], r[3] + 1)):
-            continue
-        if sum(1 for y in range(y0, y0 + 6) for x in range(x0, x0 + 6) if t[y][x] != '#') < 30:
-            continue
-        orders += [r, rr] if rng.random() < 0.5 else [rr, r]
-    # 道具刷新点：等距、靠近双方的一带
+    # 选取靠近双方的等距标记点
     d0, d1 = bfs(t, calib[0]), bfs(t, calib[1])
-    eq = [k for k in d0 if d0[k] == d1.get(k) and not near_calib(k[0], k[1], calib)]
+    eq = [k for k in d0 if d0[k] == d1.get(k)]
     if not eq:
         return None
     dmin = min(d0[k] for k in eq)
-    band = [k for k in eq if d0[k] <= dmin + 2]
+    band = [k for k in eq if d0[k] <= dmin + 2 and not near_calib(*k, calib)]
     # 一对互为旋转的点（尽量分开），再加正中央或离这一对最远的一点
     pairs_ok = [k for k in band if k != rot(*k) and rot(*k) in band]
     rng.shuffle(pairs_ok)
@@ -252,16 +223,16 @@ def _try(rng, stage):
     if len(pts) < 3:
         return None
     pts = pts[:3]
-    if rng.random() < 0.6 and (20, 20) in pts:          # 多数地图第一个道具出现在正中央
+    if rng.random() < 0.6 and (20, 20) in pts:          # 多数地图的第一个标记点在正中央
         pts.remove((20, 20))
         pts.insert(0, (20, 20))
-    return {'size': N, 'stage': stage, 'calib': [list(c) for c in calib], 'terrain': t, 'orders': orders,
+    return {'size': N, 'stage': stage, 'calib': [list(c) for c in calib], 'terrain': t,
             'boost_points': [list(p) for p in pts], 'style': style}
 
 
-def generate(seed=None, stage='prelim'):
+def generate(seed=None, stage=RULESET):
     """生成一张满足第 3 节全部约束的地图。seed 相同则地图相同；不给 seed 时随机选一个。"""
-    if stage != 'prelim':
+    if stage != RULESET:
         raise ValueError('此材料包适用初赛地图')
     if seed is None:
         seed = random.randrange(1, 10 ** 6)

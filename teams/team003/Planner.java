@@ -45,7 +45,6 @@ final class Planner {
             return divert(view, facts, facts.homeDir);
         }
         int target = attack(view, facts);
-        if (target == NONE) target = item(view, facts);
         if (target != NONE && safe(view, facts, target)) return divert(view, facts, target);
         if (planIndex == plan.length) {
             if (!facts.home) return divert(view, facts, facts.homeDir == NONE ? facts.dir : facts.homeDir);
@@ -54,27 +53,16 @@ final class Planner {
         }
         int d = plan[planIndex];
         if (!safe(view, facts, d)) {
-            clear();
-            if (!facts.home && facts.homeDir != NONE) return command(facts.homeDir);
-            for (int next = 0; next < 4; next++) {
-                if (safe(view, facts, next)) return command(next);
-            }
-            return command(facts.dir);
-        }
-        if (me.boostLeft() > 0 && planIndex + 1 < plan.length && plan[planIndex + 1] == d
-                && (!search || facts.home || facts.homeDistance + 2 < facts.threat)) {
-            int second = board.neighbors[board.neighbors[facts.here][d]][d];
-            if (board.passable(second) && view.contour[second] != board.own) {
-                planIndex += 2;
-                return command(d) + "+";
-            }
+            return divert(view, facts, facts.homeDir == NONE ? facts.dir : facts.homeDir);
         }
         int adjusted = dodge(view, facts, d);
         if (adjusted != d) {
             clear();
             return command(adjusted);
         }
-        planIndex++;
+        int steps = board.init.moveSteps(turn.turn(), me.x(), me.y());
+        if (steps == 2 && (planIndex + 1 >= plan.length || plan[planIndex + 1] != d)) clear();
+        else planIndex += steps;
         return command(d);
     }
 
@@ -98,7 +86,7 @@ final class Planner {
             var opponent = view.turn.beams().get(1 - board.init.seat());
             var core = board.init.calib().get(1 - board.init.seat());
             int start = opponent.alive() ? board.cell(opponent.x(), opponent.y()) : board.cell(core.x(), core.y());
-            enemySpeed = opponent.alive() && opponent.boostLeft() > 0 ? 2 : 1;
+            enemySpeed = opponent.alive() ? board.init.moveSteps(view.turn.turn(), opponent.x(), opponent.y()) : 1;
             enemy = board.paths(start, NONE, null).distance();
             homeDistance = home ? 0 : INF;
             for (int k = 0; k < board.count; k++) {
@@ -121,13 +109,23 @@ final class Planner {
     }
 
     private boolean safe(Board.View view, Facts f, int d) {
-        int k = board.neighbors[f.here][d];
-        return d != (f.dir ^ 1) && board.passable(k) && view.contour[k] != board.own;
+        if (d == (f.dir ^ 1)) return false;
+        var me = view.turn.beams().get(board.init.seat());
+        int k = f.here;
+        for (int i = 0; i < board.init.moveSteps(view.turn.turn(), me.x(), me.y()); i++) {
+            k = board.neighbors[k][d];
+            if (!board.passable(k) || view.contour[k] == board.own) return false;
+        }
+        return true;
     }
 
     private String divert(Board.View view, Facts f, int d) {
         clear();
-        return command(dodge(view, f, d));
+        if (safe(view, f, d)) return command(dodge(view, f, d));
+        for (int next = 0; next < 4; next++) {
+            if (safe(view, f, next)) return command(next);
+        }
+        return command(f.dir);
     }
 
     private int dodge(Board.View view, Facts f, int d) {
@@ -161,12 +159,11 @@ final class Planner {
                 return f.mine.first()[cut];
             }
         }
-        int best = search ? 13 : 9, target = NONE;
+        if (search) return NONE;
+        int best = 9, target = NONE;
         for (int k = 0; k < board.count; k++) {
             int distance = f.mine.distance()[k];
-            boolean latent = view.latent.length > 0 && view.latent[k] != '.' && view.owner[k] == board.enemy;
-            if (distance > 0 && distance < best && ((!search && view.contour[k] == board.enemy)
-                    || (latent && (!search || distance <= view.latent[k] - '0')))) {
+            if (distance > 0 && distance < best && view.contour[k] == board.enemy) {
                 best = distance;
                 target = f.mine.first()[k];
             }
@@ -174,53 +171,9 @@ final class Planner {
         return target;
     }
 
-    private int item(Board.View view, Facts f) {
-        if (!f.home && f.homeDistance + 1 >= f.threat) return NONE;
-        int limit = search ? 16 : 12;
-        if (view.turn.boost().isPresent()) {
-            var boost = view.turn.boost().orElseThrow();
-            int k = board.cell(boost.x(), boost.y()), d = f.mine.distance()[k];
-            if (d > 0 && d <= limit && (d < f.enemy[k] || (search && d == f.enemy[k] && view.owner[k] == board.own))) {
-                return f.mine.first()[k];
-            }
-        }
-        if (search && view.turn.boostNext().isPresent()) {
-            var next = view.turn.boostNext().orElseThrow();
-            int k = board.cell(next.x(), next.y()), d = f.mine.distance()[k];
-            if (d > 0 && d <= limit && d <= f.enemy[k] && view.turn.turn() - 1 + d >= next.at() + 1) {
-                return f.mine.first()[k];
-            }
-        }
-        return NONE;
-    }
-
     private double value(Board.View view, int[] captured, int length) {
-        var order = view.turn.order().orElse(null);
-        boolean finals = view.latent.length > 0;
-        boolean inTime = order != null && view.turn.turn() - 1 + length + (finals ? 9 : 1) <= order.until();
-        var boost = view.turn.boost().orElse(null);
-        var next = view.turn.boostNext().orElse(null);
-        int points = 0;
-        boolean steals = false;
-        for (int k : captured) {
-            int x = k % board.size, y = k / board.size;
-            int weight = board.value(k);
-            points += weight;
-            if (view.owner[k] == board.enemy) {
-                points += weight;
-                steals = true;
-            }
-            if (inTime && x >= order.rect().x0() && x <= order.rect().x1()
-                    && y >= order.rect().y0() && y <= order.rect().y1()) points += weight;
-            if (search && (boost != null || next != null)) {
-                int bx = boost != null ? boost.x() : next.x(), by = boost != null ? boost.y() : next.y();
-                int distance = Math.max(Math.abs(x - bx), Math.abs(y - by));
-                points += distance == 0 ? 10 : distance <= 2 ? 4 : 0;
-            }
-        }
-        if (!search) return points * 10 - length;
-        double disconnected = finals && steals ? 0.6 * view.disconnectedValue(captured) : 0.0;
-        return (points + disconnected) / (length + 8.0);
+        int gain = view.scoreGain(captured);
+        return search ? gain / (length + 8.0) : gain * 10 - length;
     }
 
     private Candidate searchFrom(Board.View view, Facts f, int start, int dir, int[] prefix) {

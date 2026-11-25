@@ -19,7 +19,6 @@ public final class Strategy {
             return String.valueOf(me.dir());
         }
 
-        var order = state.order().orElse(null);
         char own = (char) ('0' + init.seat());
         int forward = DIRECTIONS.indexOf(me.dir());
         char bestDirection = me.dir();
@@ -29,20 +28,27 @@ public final class Strategy {
             if (d == (forward ^ 1)) {
                 continue;
             }
-            int x = me.x() + DX[d];
-            int y = me.y() + DY[d];
-            if (x < 0 || x >= init.size() || y < 0 || y >= init.size()
-                    || init.terrain().get(y).charAt(x) == '#'
-                    || state.contour().get(y).charAt(x) == own) {
-                continue;
+            int x = me.x(), y = me.y();
+            boolean safe = true;
+            int steps = init.moveSteps(state.turn(), x, y);
+            for (int i = 0; i < steps; i++) {
+                x += DX[d];
+                y += DY[d];
+                if (x < 0 || x >= init.size() || y < 0 || y >= init.size()
+                        || init.terrain().get(y).charAt(x) == '#' || state.contour().get(y).charAt(x) == '0' + init.seat()) {
+                    safe = false;
+                    break;
+                }
             }
-
+            if (!safe) continue;
             int priority = state.owner().get(y).charAt(x) == own ? 0 : 1;
-            if (order != null) {
-                var rect = order.rect();
-                int distanceX = Math.max(0, Math.max(rect.x0() - x, x - rect.x1()));
-                int distanceY = Math.max(0, Math.max(rect.y0() - y, y - rect.y1()));
-                priority -= 2 * (distanceX + distanceY);
+            if (priority > 0) {
+                if (init.terrain().get(y).charAt(x) == '*') priority += 2;
+                for (int i = 0; i < 4; i++) {
+                    int nx = x + DX[i], ny = y + DY[i];
+                    if (nx >= 0 && nx < init.size() && ny >= 0 && ny < init.size()
+                            && state.owner().get(ny).charAt(nx) == own) priority++;
+                }
             }
             if (priority > bestPriority) {
                 bestDirection = DIRECTIONS.charAt(d);

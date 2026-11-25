@@ -1,10 +1,11 @@
 """Encode the public replay produced by a formal match."""
 from . import VERSION
-from .core import PARAMS, PRELIM_PARAMS
+from .protocol import board_status, grid_rows
+from .rules import PARAMS
 
 
 def replay_map(board):
-    keys = ('id', 'name', 'en', 'stage', 'size', 'calib', 'terrain', 'orders', 'boost_points')
+    keys = ('id', 'name', 'en', 'stage', 'size', 'calib', 'terrain', 'boost_points')
     return {key: board[key] for key in keys if key in board}
 
 
@@ -26,35 +27,22 @@ def public_observation(entry):
 
 
 def _cells(game):
-    owner = ''.join('.' if seat < 0 else str(seat) for seat in game.owner)
-    contour = ''.join('.' if seat < 0 else str(seat) for seat in game.trail)
-    if game.final:
-        latent = ''.join(str(game.regions[region][1]) if region else '.' for region in game.lat)
-        return owner, contour, latent
-    return owner, contour
-
-
-def _sides(game):
-    return {
-        'beams': [beam.to_dict(seat) for seat, beam in enumerate(game.beams)],
-        'score': [game.score(0), game.score(1)],
-        'bonus': list(game.bonus),
-    }
+    owner, contour = grid_rows(game)
+    return ''.join(owner), ''.join(contour)
 
 
 class Recorder:
     def __init__(self, game, players):
         self.game = game
         self.previous = _cells(game)
-        layers = ('owner', 'contour', 'latent')
-        initial = dict(zip(layers, self.previous))
-        initial.update(_sides(game))
+        owner, contour = self.previous
+        initial = {'owner': owner, 'contour': contour, **board_status(game)}
         self.data = {
             'version': VERSION,
             'map': replay_map(game.map),
             'stage': game.stage,
             'players': list(players),
-            'params': dict(PARAMS if game.final else PRELIM_PARAMS),
+            'params': dict(PARAMS),
             'init': initial,
             'frames': [],
             'observations': [],
@@ -72,10 +60,7 @@ class Recorder:
         frame = {
             'turn': game.turn,
             'cmds': list(commands),
-            **_sides(game),
-            'order': dict(game.order) if game.order else None,
-            'boost': dict(game.boost) if game.boost else None,
-            'boost_next': dict(game.boost_next) if game.boost_next else None,
+            **board_status(game),
             'events': events,
             'd': changes,
         }

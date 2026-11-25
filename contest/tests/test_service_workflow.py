@@ -70,21 +70,20 @@ class ServiceWorkflowTests(WorkspaceFixture):
         self.assertEqual(request['run_id'], 'run-1.1')
         self.assertEqual(len(contest.duels.show(request['duel_id'])['attempts']), 6)
 
-    @case('L0-013', '初赛和决赛规则的天梯对决均可并发领取不同执行')
-    def test_concurrent_workers_claim_distinct_runs_for_both_ladder_phases(self):
-        for phase in ('prelim-ladder', 'final-ladder'):
-            with self.subTest(phase=phase):
-                path = self.root / f'{phase}.sqlite'
-                contest = Contest(path, phase=phase)
-                duels = [contest.duels.accept({'sides': TEAMS})['duel_id'] for _ in range(2)]
-                workers = [Contest(path), Contest(path)]
-                gate = Barrier(2)
+    @case('L0-013', '天梯对决可并发领取不同执行')
+    def test_concurrent_workers_claim_distinct_ladder_runs(self):
+        phase = 'prelim-ladder'
+        path = self.root / f'{phase}.sqlite'
+        contest = Contest(path, phase=phase)
+        duels = [contest.duels.accept({'sides': TEAMS})['duel_id'] for _ in range(2)]
+        workers = [Contest(path), Contest(path)]
+        gate = Barrier(2)
 
-                def claim(worker):
-                    gate.wait(timeout=5)
-                    return worker.runs.claim()
+        def claim(worker):
+            gate.wait(timeout=5)
+            return worker.runs.claim()
 
-                with ThreadPoolExecutor(2) as executor:
-                    claimed = [run for run in executor.map(claim, workers) if run is not None]
-                self.assertCountEqual([run['duel_id'] for run in claimed], duels)
-                self.assertEqual(len({run['run_id'] for run in claimed}), len(duels))
+        with ThreadPoolExecutor(2) as executor:
+            claimed = [run for run in executor.map(claim, workers) if run is not None]
+        self.assertCountEqual([run['duel_id'] for run in claimed], duels)
+        self.assertEqual(len({run['run_id'] for run in claimed}), len(duels))

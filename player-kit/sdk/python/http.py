@@ -5,6 +5,7 @@ import sys
 import threading
 import traceback
 
+from engine.rules import RULESET, valid_command
 from engine.protocol import MAX_REQUEST_BYTES, dumps, json_object
 
 SDK_VERSION = 'python/2'
@@ -85,6 +86,8 @@ def make_server(*, runner_factory, port=None, host=None, name=None, quiet=True):
 
         def dispatch(self, run_id, kind, turn, msg):
             if kind == 'init':
+                if msg.get('stage') != RULESET:
+                    return 400, None
                 with lock:
                     if run_id in matches:
                         return 409, None
@@ -115,8 +118,7 @@ def make_server(*, runner_factory, port=None, host=None, name=None, quiet=True):
                     if matches.get(run_id) is not match or turn < match.newest:
                         return 409, None
                 output = match.runner.handle(msg)
-                if (not isinstance(output, dict) or not isinstance(output.get('cmd'), str)
-                        or not re.fullmatch(r'[UDLR]\+?', output['cmd'])):
+                if not isinstance(output, dict) or not valid_command(output.get('cmd')):
                     return 500, None
                 return 200, output
 

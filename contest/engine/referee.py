@@ -7,7 +7,9 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import urlsplit
 
-from .core import Game, PARAMS, TIME_LIMIT_STATES, apply_startup, apply_turn
+from .adjudication import TIME_LIMIT_STATES, apply_startup, apply_turn
+from .core import Game
+from .rules import PARAMS
 from .protocol import (MAX_RESPONSE_BYTES, dumps, end_message, init_message,
                        json_object, parse_reply, turn_message)
 from .replay import Recorder, public_observation
@@ -125,13 +127,14 @@ class HttpBot:
             return None, 'invalid', raw, us
         return r[1], 'ok', raw, us
 
+
 class Match:
     """Run a timed judge match with the Bot clients supplied by the task."""
 
-    def __init__(self, board, bots, *, out_dir, names, run_id, stage):
+    def __init__(self, board, bots, *, out_dir, names, run_id):
         self.board, self.bots, self.names = board, bots, names
         self.out_dir = Path(out_dir)
-        self.run_id, self.stage = run_id, stage
+        self.run_id = run_id
 
     @staticmethod
     def _observe(log, recorder, entry):
@@ -139,7 +142,7 @@ class Match:
         recorder.data['observations'].append(public_observation(entry))
 
     def run(self):
-        game = Game(self.board, stage=self.stage)
+        game = Game(self.board)
         recorder = Recorder(game, self.names)
         errors = [0, 0]
         self.out_dir.mkdir(parents=True, exist_ok=True)

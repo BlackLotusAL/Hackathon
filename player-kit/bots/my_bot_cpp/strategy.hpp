@@ -21,10 +21,17 @@ public:
                 if (d == (forward ^ 1)) {
                     continue;
                 }
-                const int x = me.x + dx[d];
-                const int y = me.y + dy[d];
-                if (x >= 0 && x < init_.size && y >= 0 && y < init_.size &&
-                    init_.terrain[y][x] != '#' && state.contour[y][x] != '0' + init_.seat) {
+                bool safe = true;
+                const int steps = init_.move_steps(state.turn, me.x, me.y);
+                for (int i = 1; i <= steps; ++i) {
+                    const int x = me.x + i * dx[d], y = me.y + i * dy[d];
+                    if (x < 0 || x >= init_.size || y < 0 || y >= init_.size ||
+                        init_.terrain[y][x] == '#' || state.contour[y][x] == '0' + init_.seat) {
+                        safe = false;
+                        break;
+                    }
+                }
+                if (safe) {
                     return std::string(1, directions[d]);
                 }
             }

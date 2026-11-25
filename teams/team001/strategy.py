@@ -23,8 +23,8 @@ class Strategy:
         for d in DIRS:
             if d == OPP[me.dir]:
                 continue
-            x, y = me.x + DX[d], me.y + DY[d]
-            if (0 <= x < self.init.size and 0 <= y < self.init.size
-                    and self.init.terrain[y][x] != '#' and state.contour[y][x] != str(s)):
+            path = [(me.x + i * DX[d], me.y + i * DY[d]) for i in range(1, state.move_steps(me) + 1)]
+            if all(0 <= x < self.init.size and 0 <= y < self.init.size
+                   and self.init.terrain[y][x] != '#' and state.contour[y][x] != str(s) for x, y in path):
                 ok.append(d)
         return self.rng.choice(ok) if ok else me.dir

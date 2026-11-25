@@ -26,7 +26,7 @@ python3.9 -m venv .venv
 }
 ```
 
-将 `arena_url` 指向 Arena 的 HTTP 地址，将 `archive_root` 指向 Arena 发布对局归档的共享目录。Linux 部署使用 `/var/hackathon/archives`，Contest 和 Portal 以只读方式访问。批量对战和决赛需要设置 `maps`。[共享归档](<../docs/Arena 与 Contest 对接说明.md#5-归档交付要求>) · [配置封存地图](#配置封存地图)
+将 `arena_url` 指向 Arena 的 HTTP 地址，将 `archive_root` 指向 Arena 发布对局归档的共享目录。Linux 部署使用 `/var/hackathon/archives`，Contest 和 Portal 以只读方式访问。初赛单循环和批量对战需要设置 `maps`。[共享归档](<../docs/Arena 与 Contest 对接说明.md#5-归档交付要求>) · [配置封存地图](#配置封存地图)
 
 ```sh
 .venv/bin/python -B -m service --config config/contest.json serve
@@ -40,8 +40,6 @@ python3.9 -m venv .venv
 | --- | --- |
 | `prelim-ladder` | 初赛天梯（默认） |
 | `prelim` | 正式初赛单循环 |
-| `final-ladder` | 决赛天梯 |
-| `final` | 正式决赛 |
 
 切换 `phase` 后使用同一个 `db` 重启。遇到 `409 PHASE_BUSY`，等上一赛程的对决结算后重试。
 
@@ -50,13 +48,13 @@ python3.9 -m venv .venv
 
 ## 单场对决
 
-1. 输入双方队伍编号，可用同一编号进行同队模拟。在 **对决规则** 选 **初赛**（随机一图，两局换边）或 **决赛**（封存三图，六局换边），点击 **发起对决**。
-2. 在 **对决记录** 点击可播放的执行编号，自动从该局第 0 回合播放。同队模拟按蓝、红方统计赛果，未决胜的单局按平局计。
+1. 输入双方队伍编号，可用同一编号进行同队模拟。点击 **发起对决** 后，双方在同一张随机地图上换边打两局。
+2. 在 **对决记录** 点击可播放的执行编号，自动从该局第 0 回合播放。同队模拟按蓝、红方统计赛果，初赛同时技术判负时双方各记一负。打满仍同指标的初赛模拟可在后台按蓝、红方裁定。
 3. 点击 **结束模拟** 停止后续提交和查询，Arena 继续处理已受理的任务。
 
 ## 批量对战
 
-1. 选 **对决规则** 和 **批次类型**。**正式初赛** 需要 `phase=prelim`。**独立批次** 需填写批次编号（如 `load-trial-1`）并配置至少两队。
+1. 选 **批次类型**。**正式初赛** 需要 `phase=prelim`。**独立批次** 需填写批次编号（如 `load-trial-1`）并配置至少两队。
 2. 用 **编号范围**（含起止编号）或 **手动添加**（用空格、逗号或换行分隔）配置队伍，点击 **开始对战**。每对队伍打三图六局。
 3. 用 **查看批次** 切换记录，用 **结束批次** 停止独立批次。在 **待处理记录** 重跑已作废的执行，在 **人工裁定** 填写胜方和理由。
 4. 在 **对局记录** 点击执行编号，播放当前批次已复核的单局回放。
@@ -64,11 +62,11 @@ python3.9 -m venv .venv
 
 ## 接口自检
 
-填写已启动的本机 Bot 地址（如 `http://127.0.0.1:18101`），选择 **对决规则** 后点击 **开始自检**。在 **自检报告** 查看逐项结果。[启动示例 Bot](#裁判与回放)
+填写已启动的本机 Bot 地址（如 `http://127.0.0.1:18101`），再点击 **开始自检**。在 **自检报告** 查看逐项结果。[启动示例 Bot](#裁判与回放)
 
 ## Portal 联调
 
-在天梯或正式决赛赛程提交对决，用返回的 `duel_id` 查询状态和赛果。[Portal 对接说明](<../docs/Portal 与 Contest 对接说明.md>)
+在初赛天梯赛程提交对决，用返回的 `duel_id` 查询状态和赛果。[Portal 对接说明](<../docs/Portal 与 Contest 对接说明.md>)
 
 ```sh
 curl -i 'http://127.0.0.1:8082/contest/v1/duels' \
@@ -96,21 +94,21 @@ curl -i 'http://127.0.0.1:8082/contest/v1/duels/duel-1901/result'
 
 ## 配置封存地图
 
-1. 为初赛和决赛各选三张 UTF-8 JSON 地图，计算并公布文件的 SHA-256。在 `contest/` 下可运行 `sha256sum maps/prelim/P01.json`。
-2. 编辑 [config/maps.json](config/maps.json)，以 `prelim` 或 `final` 为键，值为按比赛顺序排列的三条 `{"file":"路径","sha256":"哈希"}` 的数组。`file` 相对于地图池文件所在目录，例如 `../maps/prelim/P01.json`。
+1. 为初赛选三张 UTF-8 JSON 地图，计算并公布文件的 SHA-256。在 `contest/` 下可运行 `sha256sum maps/prelim/P01.json`。
+2. 编辑 [config/maps.json](config/maps.json)，以 `prelim` 为键，值为按比赛顺序排列的三条 `{"file":"路径","sha256":"哈希"}` 的数组。`file` 相对于地图池文件所在目录，例如 `../maps/prelim/P01.json`。
 3. 使用这份地图池时，将 `contest.json` 的 `maps` 设为 `maps.json`。
 
 ## 生成随机地图
 
-在 `contest/` 下执行，`--stage` 可选 `prelim` 或 `final`。
+在 `contest/` 下执行。
 
 ```sh
-.venv/bin/python -B -m engine mapgen --seed 42 --stage prelim --count 3 --out maps.json
+.venv/bin/python -B -m engine mapgen --seed 42 --count 3 --out maps.json
 ```
 
 ## 裁判与回放
 
-初赛在 `player-kit/` 的两个终端分别启动 Bot。决赛使用 Arena 的 `final` 运行环境。
+在 `player-kit/` 的两个终端分别启动 Bot。
 
 ```sh
 BOT_HOST=127.0.0.1 BOT_PORT=18101 \
@@ -126,7 +124,7 @@ BOT_HOST=127.0.0.1 BOT_PORT=18102 \
 .venv/bin/python -B -m engine verify-replay out/replay.json --log-file out/log.jsonl
 ```
 
-复核封存地图时加上 `--map-file` 和 `--map-sha256`。
+复核封存地图时加上 `--map-file` 和 `--map-sha256`。回放参数 `station_period` 标识当前规则，取值为 100。
 
 ## 构建裁判镜像
 

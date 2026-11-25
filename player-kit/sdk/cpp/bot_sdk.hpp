@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdlib>
 #include <optional>
 #include <string>
 #include <vector>
@@ -12,13 +13,6 @@ struct Point {
     int y;
 };
 
-struct Rect {
-    int x0;
-    int y0;
-    int x1;
-    int y1;
-};
-
 struct InitState {
     int seat;
     int size;
@@ -27,8 +21,17 @@ struct InitState {
     std::string map;
     std::vector<std::string> terrain;
     std::array<Point, 2> calib;
-    std::vector<Rect> orders;
     std::vector<Point> boost_points;
+
+    std::optional<Point> active_station(int turn) const {
+        if (turn < 1 || boost_points.empty()) return std::nullopt;
+        return boost_points[((turn - 1) / 100) % boost_points.size()];
+    }
+
+    int move_steps(int turn, int x, int y) const {
+        auto station = active_station(turn);
+        return station && std::abs(x - station->x) <= 1 && std::abs(y - station->y) <= 1 ? 2 : 1;
+    }
 };
 
 struct Beam {
@@ -39,32 +42,16 @@ struct Beam {
     int speed;
     bool alive;
     int restart_in;
-    int boost_left;
-};
-
-struct Order {
-    int no;
-    Rect rect;
-    int until;
-};
-
-struct NextBoost {
-    int x;
-    int y;
-    int at;
 };
 
 struct TurnState {
     int turn;
     std::vector<std::string> owner;
     std::vector<std::string> contour;
-    std::vector<std::string> latent;  // Empty when the referee omits the field.
     std::array<Beam, 2> beams;
     std::array<int, 2> score;
-    std::array<int, 2> bonus;
-    std::optional<Order> order;
-    std::optional<Point> boost;
-    std::optional<NextBoost> boost_next;
+    std::array<int, 2> lead_turns{};
+    std::array<int, 2> time_us{};
 };
 
 }  // namespace bot_sdk

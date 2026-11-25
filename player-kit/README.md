@@ -2,6 +2,20 @@
 
 本地对战使用 `engine/`，由它管理 Bot 进程和 HTTP 通信。开发接口和构建适配按语言放在 `sdk/python/`、`sdk/cpp/` 和 `sdk/java/`。
 
+## 初赛回合接口
+
+每回合只返回一个方向字符 `U`、`D`、`L` 或 `R`。开局消息的 `boost_points` 依次给出 A、B、C 的中心。第 1～100 回合点亮 A，随后每 100 回合换站，六轮依次为 A、B、C、A、B、C。回合消息的 `active_station` 给出本回合亮站的中心坐标。从它周围 3×3 可通行格起步时，同一方向自动走两步，每步单独结算。回合开始时，在场束斑的 `speed` 来自上一已结算局面，本回合步数可用下表的接口查询。
+
+| 语言 | 读取本回合的亮站 | 查询起步格的移动步数 |
+| --- | --- | --- |
+| Python | `state.active_station` | `state.move_steps(state.me)` |
+| C++ | `init.active_station(state.turn)` | `init.move_steps(state.turn, x, y)` |
+| Java | `init.activeStation(state.turn())` | `init.moveSteps(state.turn(), x, y)` |
+
+两个座位的累计领先回合数和响应时间（整数微秒）随初赛回合消息提供，字段为 `lead_turns` 和 `time_us`。Java 对应 `leadTurns()` 和 `timeUs()`。
+
+`score` 已扣除周长成本。全队校准区以外领地的露边每满 3 条扣 1 分，普通格面值 1、关键格面值 3。双方同时技术判负时，回放结果的 `winner` 为 `null`，`reason` 为 `double_loss`。
+
 ## 本地对战
 
 使用 Python 3.9 或以上版本。运行 C++ Bot 还需要 CMake 3.16 或以上版本和 C++17 工具链，运行 Java Bot 还需要 JDK 17 和 Maven。C++ 和 Java 会在临时目录构建，再以本机进程运行。

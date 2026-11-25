@@ -23,7 +23,7 @@ public final class Main {
     private static final int MAX_TURNS = 600;
     private static final Pattern MATCH_PATH =
             Pattern.compile("/v1/matches/([A-Za-z0-9_.-]{1,64})/(init|end|turns/([1-9][0-9]{0,2}))");
-    private static final Pattern COMMAND = Pattern.compile("[UDLR]\\+?");
+    private static final Pattern COMMAND = Pattern.compile("[UDLR]");
     private static final ObjectMapper JSON = new ObjectMapper().enable(DeserializationFeature.FAIL_ON_TRAILING_TOKENS);
 
     private static final class Match {

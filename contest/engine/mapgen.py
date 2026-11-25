@@ -4,6 +4,7 @@ import random
 from collections import deque
 
 from .protocol import dumps, json_object
+from .rules import RULESET
 
 N = 41
 C = N - 1                      # 旋转中心：(x, y) <-> (C - x, C - y)
@@ -33,11 +34,21 @@ def near_calib(x, y, calib, r=4):
 
 
 # ---------------------------------------------------------------- 校验
+def _coordinate_lists(values, width):
+    return isinstance(values, (list, tuple)) and all(
+        isinstance(value, (list, tuple)) and len(value) == width and all(type(coord) is int for coord in value)
+        for value in values
+    )
+
+
 def validate(m):
     """检查一张地图是否满足第 3 节的全部约束，返回错误列表（空列表表示通过）。"""
     err = []
-    t = m.get('terrain') or []
-    if m.get('size') != N or len(t) != N or any(len(r) != N for r in t):
+    if m.get('stage', RULESET) != RULESET:
+        return ['地图须使用当前赛题规则']
+    t = m.get('terrain')
+    if (m.get('size') != N or not isinstance(t, (list, tuple)) or len(t) != N
+            or any(not isinstance(r, str) or len(r) != N for r in t)):
         return ['尺寸不是 41×41']
     if any(c not in '.#*' for r in t for c in r):
         err.append('出现 . # * 以外的字符')
@@ -48,9 +59,16 @@ def validate(m):
                 break
         if err and err[-1].startswith('不对称'):
             break
-    c0, c1 = [tuple(c) for c in m['calib']]
+    calib = m.get('calib')
+    if not _coordinate_lists(calib, 2) or len(calib) != 2:
+        return err + ['必须提供两个校准区中心']
+    c0, c1 = map(tuple, calib)
+    if any(not (1 <= x < N - 1 and 1 <= y < N - 1) for x, y in (c0, c1)):
+        return err + ['校准区出界']
     if rot(*c0) != c1:
         err.append('两个校准区不是 180° 旋转关系')
+    if all(abs(a - b) <= 2 for a, b in zip(c0, c1)):
+        err.append('两个 3×3 校准区重叠')
     free = sum(1 for r in t for c in r if c != '#')
     d0, d1 = bfs(t, c0), bfs(t, c1)
     if len(d0) != free:
@@ -60,43 +78,29 @@ def validate(m):
             for x in range(cx - 4, cx + 5):
                 inner = abs(x - cx) <= 1 and abs(y - cy) <= 1
                 if not (0 <= x < N and 0 <= y < N):
-                    if inner:
-                        err.append('校准区出界')
                     continue
                 if t[y][x] == '#':
                     err.append('校准区 (%d,%d) 周围 4 格内有缺陷 (%d,%d)' % (cx, cy, x, y))
                 elif inner and t[y][x] != '.':
                     err.append('校准区 3×3 内不是空白格 (%d,%d)' % (x, y))
-    orders = m.get('orders') or []
-    if not 6 <= len(orders) <= 8 or len(orders) % 2:
-        err.append('订单区域数量 %d 不在 6～8 或不是偶数' % len(orders))
-    for i, r in enumerate(orders):
-        x0, y0, x1, y1 = r
-        if x1 - x0 != 5 or y1 - y0 != 5 or x0 < 0 or y0 < 0 or x1 >= N or y1 >= N:
-            err.append('订单 %d 不是基板内的 6×6 区域' % (i + 1))
-            continue
-        if i % 2 == 1:
-            p = orders[i - 1]
-            if [C - p[2], C - p[3], C - p[0], C - p[1]] != list(r):
-                err.append('订单 %d 不是订单 %d 的旋转' % (i + 1, i))
-        if sum(1 for y in range(y0, y1 + 1) for x in range(x0, x1 + 1) if t[y][x] != '#') < 18:
-            err.append('订单 %d 缺陷过多' % (i + 1))
-    bps = m.get('boost_points') or []
-    if len(bps) != 3:
-        err.append('道具刷新点不是 3 个')
-    eq = [k for k in d0 if d0[k] == d1.get(k) and not near_calib(k[0], k[1], (c0, c1))]
+    bps = m.get('boost_points')
+    if not _coordinate_lists(bps, 2):
+        return err + ['加速站中心坐标无效']
+    if len(bps) != 3 or len(set(map(tuple, bps))) != 3:
+        err.append('加速站中心不是 3 个')
+    eq = [k for k in d0 if d0[k] == d1.get(k)]
     dmin = min([d0[k] for k in eq] or [0])
     for p in bps:
         x, y = p
         if not (0 <= x < N and 0 <= y < N) or t[y][x] == '#':
-            err.append('刷新点 %s 在缺陷上或出界' % p)
+            err.append('标记点 %s 在缺陷上或出界' % p)
             continue
         if near_calib(x, y, (c0, c1)):
-            err.append('刷新点 %s 在校准区周围 4 格内' % p)
+            err.append('标记点 %s 在校准区周围 4 格内' % p)
         if d0.get((x, y)) != d1.get((x, y)):
-            err.append('刷新点 %s 到双方路程不等' % p)
+            err.append('标记点 %s 到双方路程不等' % p)
         elif d0.get((x, y), 0) > dmin + 2:
-            err.append('刷新点 %s 比最近的等距格远了 %d 步' % (p, d0[(x, y)] - dmin))
+            err.append('标记点 %s 比最近的等距格远了 %d 步' % (p, d0[(x, y)] - dmin))
     return err
 
 
@@ -189,30 +193,13 @@ def _try(rng, stage):
             g[y][x] = '*'
         kc += len(cells)
     t = [''.join(r) for r in g]
-    # 订单：成对的 6×6 区域
-    orders, tries = [], 0
-    pairs = rng.choice((3, 3, 4))
-    while len(orders) < pairs * 2 and tries < 500:
-        tries += 1
-        x0, y0 = rng.randint(0, N - 6), rng.randint(0, N - 6)
-        r = [x0, y0, x0 + 5, y0 + 5]
-        rr = [C - r[2], C - r[3], C - r[0], C - r[1]]
-        if r == rr or abs(x0 - rr[0]) < 6 and abs(y0 - rr[1]) < 6:
-            continue                                   # 与自己的旋转重叠
-        if any(abs(x0 - o[0]) < 4 and abs(y0 - o[1]) < 4 for o in orders):
-            continue
-        if any(near_calib(x, y, calib, 1) for x in range(r[0], r[2] + 1) for y in range(r[1], r[3] + 1)):
-            continue
-        if sum(1 for y in range(y0, y0 + 6) for x in range(x0, x0 + 6) if t[y][x] != '#') < 30:
-            continue
-        orders += [r, rr] if rng.random() < 0.5 else [rr, r]
-    # 道具刷新点：等距、靠近双方的一带
+    # 选取靠近双方的等距标记点
     d0, d1 = bfs(t, calib[0]), bfs(t, calib[1])
-    eq = [k for k in d0 if d0[k] == d1.get(k) and not near_calib(k[0], k[1], calib)]
+    eq = [k for k in d0 if d0[k] == d1.get(k)]
     if not eq:
         return None
     dmin = min(d0[k] for k in eq)
-    band = [k for k in eq if d0[k] <= dmin + 2]
+    band = [k for k in eq if d0[k] <= dmin + 2 and not near_calib(*k, calib)]
     # 一对互为旋转的点（尽量分开），再加正中央或离这一对最远的一点
     pairs_ok = [k for k in band if k != rot(*k) and rot(*k) in band]
     rng.shuffle(pairs_ok)
@@ -230,15 +217,17 @@ def _try(rng, stage):
     if len(pts) < 3:
         return None
     pts = pts[:3]
-    if rng.random() < 0.6 and (20, 20) in pts:          # 多数地图第一个道具出现在正中央
+    if rng.random() < 0.6 and (20, 20) in pts:          # 多数地图的第一个标记点在正中央
         pts.remove((20, 20))
         pts.insert(0, (20, 20))
-    return {'size': N, 'stage': stage, 'calib': [list(c) for c in calib], 'terrain': t, 'orders': orders,
+    return {'size': N, 'stage': stage, 'calib': [list(c) for c in calib], 'terrain': t,
             'boost_points': [list(p) for p in pts], 'style': style}
 
 
-def generate(seed=None, stage='prelim'):
+def generate(seed=None, stage=RULESET):
     """生成一张满足第 3 节全部约束的地图。seed 相同则地图相同；不给 seed 时随机选一个。"""
+    if stage != RULESET:
+        raise ValueError('此材料包适用初赛地图')
     if seed is None:
         seed = random.randrange(1, 10 ** 6)
     seed = int(seed)
@@ -251,8 +240,12 @@ def generate(seed=None, stage='prelim'):
     raise RuntimeError('种子 %d 生成失败' % seed)
 
 
-def load_map(spec, stage):
+
+
+def load_map(spec, stage=RULESET):
     """Load the board in an Arena request and hash the bytes used by the judge."""
+    if stage != RULESET:
+        raise ValueError('裁判只接受当前赛题规则')
     if 'seed' in spec and 'file' not in spec and type(spec['seed']) is int:
         board = generate(spec['seed'], stage)
         digest = hashlib.sha256(dumps(board).encode('utf-8')).hexdigest()
@@ -273,17 +266,12 @@ def load_map(spec, stage):
 
 
 def draw(m):
-    """把地图画成文字：0 / 1 校准区，# 缺陷，* 关键图形区，o 订单区域，+ 刷新点。"""
+    """用 0、1 标记校准区，用 A、B、C 标记加速站。"""
     g = [list(r) for r in m['terrain']]
-    for r in m['orders']:
-        for y in range(r[1], r[3] + 1):
-            for x in range(r[0], r[2] + 1):
-                if g[y][x] == '.':
-                    g[y][x] = 'o'
     for s, (cx, cy) in enumerate(m['calib']):
         for y in range(cy - 1, cy + 2):
             for x in range(cx - 1, cx + 2):
                 g[y][x] = str(s)
-    for x, y in m['boost_points']:
-        g[y][x] = '+'
+    for station, (x, y) in enumerate(m['boost_points']):
+        g[y][x] = 'ABC'[station]
     return '\n'.join(' '.join(r) for r in g)

@@ -44,7 +44,6 @@ public:
         if (!facts.home && facts.threat <= facts.home_distance + (search_ ? 1 : 2)
                 && facts.home_dir != no_direction) return divert(board, facts, facts.home_dir);
         int target = attack(board, facts);
-        if (target == no_direction) target = item(board, facts);
         if (target != no_direction && safe(board, facts, target)) return divert(board, facts, target);
         if (plan_.empty()) {
             if (!facts.home) return divert(board, facts, facts.home_dir == no_direction ? facts.dir : facts.home_dir);
@@ -52,27 +51,16 @@ public:
         }
         const int d = plan_.front();
         if (!safe(board, facts, d)) {
-            plan_.clear();
-            if (!facts.home && facts.home_dir != no_direction) return command(facts.home_dir);
-            for (int next = 0; next < 4; ++next) {
-                if (safe(board, facts, next)) return command(next);
-            }
-            return command(facts.dir);
-        }
-        if (me.boost_left > 0 && plan_.size() >= 2 && plan_[1] == d
-                && (!search_ || facts.home || facts.home_distance + 2 < facts.threat)) {
-            const int second = board.neighbors[board.neighbors[facts.here][d]][d];
-            if (board.passable(second) && board.contour[second] != board.own) {
-                plan_.erase(plan_.begin(), plan_.begin() + 2);
-                return command(d) + '+';
-            }
+            return divert(board, facts, facts.home_dir == no_direction ? facts.dir : facts.home_dir);
         }
         const int adjusted = dodge(board, facts, d);
         if (adjusted != d) {
             plan_.clear();
             return command(adjusted);
         }
-        plan_.erase(plan_.begin());
+        const int steps = init_.move_steps(turn.turn, me.x, me.y);
+        if (steps == 2 && (plan_.size() < 2 || plan_[1] != d)) plan_.clear();
+        else plan_.erase(plan_.begin(), plan_.begin() + steps);
         return command(d);
     }
 
@@ -93,7 +81,7 @@ private:
             : here(b.cell(b.turn.beams[b.init.seat].x, b.turn.beams[b.init.seat].y)),
               dir(static_cast<int>(std::string_view(directions).find(b.turn.beams[b.init.seat].dir))),
               home(b.owner[here] == b.own), mine(my_paths(b)), enemy(enemy_times(b)),
-              enemy_speed(b.turn.beams[1 - b.init.seat].boost_left > 0 ? 2 : 1) {
+              enemy_speed(b.enemy_steps()) {
             if (!home) home_distance = unreachable;
             for (int k = 0; k < b.count; ++k) {
                 if (!home && b.owner[k] == b.own && mine.distance[k] < home_distance) {
@@ -113,7 +101,7 @@ private:
             const auto& beam = b.turn.beams[1 - b.init.seat];
             const auto& core = b.init.calib[1 - b.init.seat];
             auto result = b.paths(beam.alive ? b.cell(beam.x, beam.y) : b.cell(core.x, core.y)).distance;
-            const int speed = beam.alive && beam.boost_left > 0 ? 2 : 1;
+            const int speed = b.enemy_steps();
             for (int& value : result) {
                 if (value != unreachable) value = beam.restart_in + (value + speed - 1) / speed;
             }
@@ -139,13 +127,23 @@ private:
     bool over_budget() const { return !unlimited_ && Clock::now() >= deadline_; }
     static std::string command(int d) { return std::string(1, directions[d]); }
     static bool safe(const Board& b, const Facts& f, int d) {
-        const int k = b.neighbors[f.here][d];
-        return d != (f.dir ^ 1) && b.passable(k) && b.contour[k] != b.own;
+        if (d == (f.dir ^ 1)) return false;
+        const auto& me = b.turn.beams[b.init.seat];
+        int k = f.here;
+        for (int i = 0; i < b.init.move_steps(b.turn.turn, me.x, me.y); ++i) {
+            k = b.neighbors[k][d];
+            if (!b.passable(k) || b.contour[k] == b.own) return false;
+        }
+        return true;
     }
 
     std::string divert(const Board& b, const Facts& f, int d) {
         plan_.clear();
-        return command(dodge(b, f, d));
+        if (safe(b, f, d)) return command(dodge(b, f, d));
+        for (int next = 0; next < 4; ++next) {
+            if (safe(b, f, next)) return command(next);
+        }
+        return command(f.dir);
     }
 
     int dodge(const Board& b, const Facts& f, int d) const {
@@ -182,12 +180,11 @@ private:
                 return f.mine.first[cut];
             }
         }
-        int best = search_ ? 13 : 9, target = no_direction;
+        if (search_) return no_direction;
+        int best = 9, target = no_direction;
         for (int k = 0; k < b.count; ++k) {
             const int distance = f.mine.distance[k];
-            const bool latent = !b.latent.empty() && b.latent[k] != '.' && b.owner[k] == b.enemy;
-            if (distance > 0 && distance < best
-                    && ((!search_ && b.contour[k] == b.enemy) || (latent && (!search_ || distance <= b.latent[k] - '0')))) {
+            if (distance > 0 && distance < best && b.contour[k] == b.enemy) {
                 best = distance;
                 target = f.mine.first[k];
             }
@@ -195,51 +192,9 @@ private:
         return target;
     }
 
-    int item(const Board& b, const Facts& f) const {
-        if (!f.home && f.home_distance + 1 >= f.threat) return no_direction;
-        const int limit = search_ ? 16 : 12;
-        if (b.turn.boost) {
-            const int k = b.cell(b.turn.boost->x, b.turn.boost->y), d = f.mine.distance[k];
-            if (d > 0 && d <= limit && (d < f.enemy[k] || (search_ && d == f.enemy[k] && b.owner[k] == b.own))) {
-                return f.mine.first[k];
-            }
-        }
-        if (search_ && b.turn.boost_next) {
-            const auto& next = *b.turn.boost_next;
-            const int k = b.cell(next.x, next.y), d = f.mine.distance[k];
-            if (d > 0 && d <= limit && d <= f.enemy[k] && b.turn.turn - 1 + d >= next.at + 1) {
-                return f.mine.first[k];
-            }
-        }
-        return no_direction;
-    }
-
     double value(const Board& b, const std::vector<int>& captured, int length) const {
-        const auto& order = b.turn.order;
-        const bool final = !b.latent.empty();
-        const bool in_time = order && b.turn.turn - 1 + length + (final ? 9 : 1) <= order->until;
-        int points = 0;
-        bool steals = false;
-        for (int k : captured) {
-            const int x = k % b.size, y = k / b.size;
-            const int weight = b.value(k);
-            points += weight;
-            if (b.owner[k] == b.enemy) {
-                points += weight;
-                steals = true;
-            }
-            if (in_time && x >= order->rect.x0 && x <= order->rect.x1
-                    && y >= order->rect.y0 && y <= order->rect.y1) points += weight;
-            if (search_ && (b.turn.boost || b.turn.boost_next)) {
-                const int bx = b.turn.boost ? b.turn.boost->x : b.turn.boost_next->x;
-                const int by = b.turn.boost ? b.turn.boost->y : b.turn.boost_next->y;
-                const int distance = std::max(std::abs(x - bx), std::abs(y - by));
-                points += distance == 0 ? 10 : distance <= 2 ? 4 : 0;
-            }
-        }
-        if (!search_) return points * 10 - length;
-        const double disconnected = final && steals ? 0.6 * b.disconnected_value(captured) : 0.0;
-        return (points + disconnected) / (length + 8.0);
+        const int gain = b.score_gain(captured);
+        return search_ ? gain / (length + 8.0) : gain * 10 - length;
     }
 
     Candidate search_from(const Board& b, const Facts& f, int start, int dir, const Route& prefix) const {

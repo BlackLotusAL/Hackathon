@@ -26,7 +26,7 @@ HTTP 报文与归档中的 JSON、JSONL 使用 UTF-8。错误响应是包含稳�
 | --- | --- | --- |
 | `run_id` | string | 必填，由 Contest 分配，匹配 `run-[0-9]+\.[1-9][0-9]*`。格式为 `run-<局号>.<尝试次数>`，局号在同一归档中唯一，尝试次数从 1 开始 |
 | `duel_id` | string | 必填，整场对决编号，匹配 `duel-[A-Za-z0-9_-]+`。同场各局和重跑使用同一编号 |
-| `rules` | string | 必填，取 `prelim`（初赛）或 `final`（决赛），用于匹配裁判镜像和 Bot 运行环境 |
+| `rules` | string | 必填，固定填 `prelim`，用于匹配裁判镜像和选手材料包 |
 | `bots` | string[2] | 必填，两项参赛方编号。队伍编号为 `team` 加三位数字，基准编号为 `bot001`、`bot002`、`bot003`。下标 0、1 对应该局的出生点。后台单场模拟允许两项为同一队伍编号，其他对决使用不同编号 |
 | `config` | object | 必填，原样交付给裁判的对局配置 |
 | `config.map` | object | 必填，按下表提供一种地图配置 |
@@ -36,9 +36,9 @@ HTTP 报文与归档中的 JSON、JSONL 使用 UTF-8。错误响应是包含稳�
 | 天梯生成地图 | `seed` 为 Contest 随机生成并随对决固定的 JSON 整数种子 |
 | 固定地图文件 | `file` 为地图文件的完整 UTF-8 文本字符串。`sha256` 为该文本的 SHA-256，以 64 位小写十六进制表示。固定地图池使用赛前已公布的哈希 |
 
-`seed` 和 `file` 互斥。天梯对决交付种子，初赛单循环、正式决赛和独立批次交付固定地图文件。决赛规则使用 `rules: "final"` 和决赛地图池的 `file`、`sha256`。裁判将外层 JSON 解码后的 `file` 编码为 UTF-8 并核验哈希，原有的空白和换行均参与计算。Arena 按收到的 `config` 和 `bots` 顺序执行单局，使用原 `run_id` 查询和归档。
+`seed` 和 `file` 互斥。天梯对决交付种子，初赛单循环和独立批次交付固定地图文件。裁判将外层 JSON 解码后的 `file` 编码为 UTF-8 并核验哈希，原有的空白和换行均参与计算。Arena 按收到的 `config` 和 `bots` 顺序执行单局，使用原 `run_id` 查询和归档。
 
-后台单场对决的 `duel_id` 以 `duel-manual-` 开头。初赛模拟使用天梯的种子与版本固定方式，决赛模拟使用正式决赛的地图池与版本固定方式。同队模拟使用同一个固定提交启动两个独立 Bot 服务实例，按出生点分别记录归档和胜方。
+后台单场对决的 `duel_id` 以 `duel-manual-` 开头。单场模拟使用天梯的地图种子与版本固定方式。同队模拟使用同一个固定提交启动两个独立 Bot 服务实例，按出生点分别记录归档和胜方。
 
 ### 2.2 天梯提交示例
 
@@ -124,7 +124,7 @@ curl -i 'http://127.0.0.1:18080/arena/v1/runs/query' \
 | 场景 | 查询节奏 |
 | --- | --- |
 | 正式初赛、独立批次 | 每 10 秒一轮。查询已受理或提交未确认、尚未取得终态的当前尝试。每批最多 100 个编号，按批次顺序发送。例如同一轮有 103 个待查编号时，发出 100 条和 3 条两次请求。上一轮还未结束时跳过当前定时点，查询失败的尝试留到下一轮 |
-| 天梯对决、正式决赛 | 每次发送一个编号。返回 `queued` 或 `running` 后至少等待 0.5 秒再查询，失败时从 1 秒退避至最多 30 秒 |
+| 天梯对决和单场模拟 | 每次发送一个编号。返回 `queued` 或 `running` 后至少等待 0.5 秒再查询，失败时从 1 秒退避至最多 30 秒 |
 
 已确认受理的编号进入 `missing_run_ids` 时提示主办方核对。同批其他编号的有效状态仍可落库。
 
@@ -244,11 +244,11 @@ Linux 宿主机使用 `/var/hackathon/archives` 作为持久化共享归档目�
     "run_id": "run-7001.2",
     "version": "v1",
     "map": "R42",
-    "map_sha256": "79c625cec70b0666fe29bb8ed8ebb9684c1042344848588c2980c2cfe5f20075",
+    "map_sha256": "4749aa0de2238ffdaefc9821ef8f9d7e7b94d4d717271a2d958171dc6b2d8be8",
     "winner": 0,
     "reason": "time",
     "score": [9, 9],
-    "bonus": [0, 0],
+    "turns": 600,
     "lead_turns": [0, 0],
     "time_us": [600600, 1200600]
   }
@@ -258,13 +258,13 @@ Linux 宿主机使用 `/var/hackathon/archives` 作为持久化共享归档目�
 | 字段 | 含义 |
 | --- | --- |
 | `bots` | 按请求的出生点顺序提供两项，每项包含与请求一致的 `team_id`。参赛队伍必填实际固定的 `commit`，基准 Bot 可省略 `commit`。`bots[].state` 仅用于构建失败清单 |
-| `duel_started_at` | 天梯对决必填，使用第 6.1 节保存的时间字符串，格式为带 `+08:00` 的 ISO 8601。初赛单循环、正式决赛和压测可省略 |
+| `duel_started_at` | 天梯对决必填，使用第 6.1 节保存的时间字符串，格式为带 `+08:00` 的 ISO 8601。初赛单循环和压测可省略 |
 | `result.run_id` | 必填字符串，取自裁判原始输出，须与本次完整 `run_id` 一致，含尝试后缀，例如 `run-7001.2` |
 | `result.version` | 必填，裁判输出的 `v1` |
 | `result.map`、`result.map_sha256` | 实际地图编号及哈希。正式地图的哈希须与请求的 `config.map.sha256` 一致 |
-| `result.winner`、`result.reason` | 胜方出生点 `0` 或 `1`（未决胜时为 `null`）及裁判的单局终止原因。按当局的 `bots` 确定参赛方 |
-| `result.score`、`result.bonus`、`result.lead_turns`、`result.time_us` | 四项指标均按出生点排列。`time_us` 保留裁判核算的整数微秒，包含触发技术判负而未结算的回合 |
-| `result.turns` | 可选，使用裁判输出的已结算回合数 |
+| `result.winner`、`result.reason` | 胜方出生点 `0` 或 `1`（双败或待裁定时为 `null`）及裁判的单局终止原因。初赛 `reason=double_loss` 表示该局生效且双方各记一负，`reason=tie` 表示三项全同、等待裁定。按当局的 `bots` 确定参赛方 |
+| `result.score`、`result.lead_turns`、`result.time_us` | 得分、领先回合数和累计响应时间，均按出生点排列。响应时间保留整数微秒，包含触发技术判负而未结算的回合 |
+| `result.turns` | 已结算回合数。清单省略时由 Contest 从复核通过的回放还原。初赛整场只汇总满 600 回合的单局指标 |
 
 ### 5.2 构建失败清单
 
@@ -289,9 +289,9 @@ Linux 宿主机使用 `/var/hackathon/archives` 作为持久化共享归档目�
 
 | 字段 | 含义 |
 | --- | --- |
-| `map`、`stage`、`players`、`params` | 地图、赛段、按出生点排列的双方和规则参数 |
+| `map`、`stage`、`players`、`params` | 地图、赛段标识 `prelim`、按出生点排列的双方和规则参数。`params.station_period` 为 100 |
 | `init` | 初始网格、束斑和得分 |
-| `frames` | 逐回合记录命令、束斑、得分、奖励、订单、道具、事件和格子变化。可选的 `frames[].ms` 供界面显示 |
+| `frames` | 逐回合记录命令、束斑、下一回合亮站、决胜指标、事件和格子变化。可选的 `frames[].ms` 供界面显示 |
 | `result` | 终局结果及已结算回合数 |
 | `observations` | 所有已完成的单局必填，按原顺序记录裁判观测 |
 
@@ -313,7 +313,7 @@ Linux 宿主机使用 `/var/hackathon/archives` 作为持久化共享归档目�
 
 ### 6.1 固定参赛版本与开始时间
 
-天梯对决使用对决开始时各队仓库的 `main` 分支提交，基准 Bot 使用当期版本。初赛单循环和正式决赛使用该赛段提交截止、仓库锁定时记录的 `main` 分支最终提交。独立批次使用所选规则与批次队伍的已固定提交，`duel_id` 以 `duel-load-` 开头，`run_id` 继续由 Contest 在同一编号序列中分配。
+天梯对决使用对决开始时各队仓库的 `main` 分支提交，基准 Bot 使用当期版本。初赛单循环使用提交截止、仓库锁定时记录的 `main` 分支最终提交。独立批次使用批次队伍的已固定提交，`duel_id` 以 `duel-load-` 开头，`run_id` 继续由 Contest 在同一编号序列中分配。
 
 首次构建前按 `duel_id` 原子创建并持久保存参赛方编号与固定版本的对应关系。并发到达的同场任务共享同一份固定记录。同场各局及重跑按参赛方编号取固定版本，再按该局 `bots` 的顺序分配到出生点。首次尝试未生成归档时，固定记录仍须保留。
 
@@ -325,11 +325,11 @@ Arena 从固定提交的代码树构建 Bot。提交根目录包含 UTF-8 编码
 
 | `language` | 提交所需文件 | 构建和启动 |
 | --- | --- | --- |
-| `python` | `strategy.py`、`requirements.txt` | 在 Bot 运行环境放置与任务 `rules` 对应的 Python 运行包，按 `requirements.txt` 安装提交声明的依赖。以运行包根目录为工作目录，运行 `python -E -s -B -u -m sdk.python <提交目录绝对路径>`，入口加载 `Strategy` |
+| `python` | `strategy.py`、`requirements.txt` | 在 Bot 运行环境放置当期选手材料包的 Python 运行包，按 `requirements.txt` 安装提交声明的依赖。以运行包根目录为工作目录，运行 `python -E -s -B -u -m sdk.python <提交目录绝对路径>`，入口加载 `Strategy` |
 | `cpp` | `strategy.hpp`、`CMakeLists.txt` | 以材料包的 `sdk/cpp/` 为 CMake 源目录，用 `-DBOT_SUBMISSION=<提交目录绝对路径>` 指定提交并构建 `bot` 目标。可用 `-DBOT_OUTPUT_DIR=<产物目录>` 指定可执行文件的输出目录。Bot 通过 `sdk.cpp.cpp_gateway` 提供 HTTP 接口 |
 | `java` | `pom.xml`、`Strategy.java` | 将提交根目录的 `.java` 文件和启动适配器纳入 Maven 的 `bot` 包源码目录，SDK 状态类型放在 `bot.sdk` 包源码目录。镜像使用 `bot.Main` 入口 |
 
-Arena 按任务的 `rules` 提供 Python Bot 运行环境。决赛天梯和正式决赛均使用 `final`。两个赛段提供相同的 Python 策略入口和 SDK 状态类型，选手及基准 Bot 可以沿用同一份提交代码。`engine.rules` 的参数和 `TurnState.game` 的推演须与本局裁判使用的规则一致，决赛推演须支持潜像规则。
+Arena 使用与裁判同一版本的选手材料包构建 Bot。`engine.rules` 的参数和 `TurnState.game` 的本地推演与裁判规则一致。
 
 C++ 和 Java 的正式 Bot 镜像由 Arena 构建，运行平台为 Linux amd64。Bot 容器内设置 `BOT_HOST=0.0.0.0` 和 `BOT_PORT=8080`，供本局网络内的裁判调用。
 
@@ -339,7 +339,7 @@ C++ 和 Java 的正式 Bot 镜像由 Arena 构建，运行平台为 Linux amd64�
 docker build --platform linux/amd64 -f contest/judge/Dockerfile -t exposure-judge:local .
 ```
 
-将任务目录只读挂载到 `/task`，入口读取 `/task/task.json`。沿用请求的 `run_id`、`rules` 和 `config`，将两个 `bots` 编号按原顺序换成含各自 HTTP 服务根地址 `url` 的对象。可在 `name` 填写原参赛方编号，裁判将其作为回放显示名。裁判默认使用任务文件的 `rules`，本地执行时可用 `--stage` 覆盖，省略 `rules` 时默认为初赛。
+将任务目录只读挂载到 `/task`，入口读取 `/task/task.json`。沿用请求的 `run_id`、`rules` 和 `config`，将两个 `bots` 编号按原顺序换成含各自 HTTP 服务根地址 `url` 的对象。可在 `name` 填写原参赛方编号，裁判将其作为回放显示名。裁判接受 `rules: "prelim"`。本地执行可省略该字段。
 
 ```json
 {
@@ -366,7 +366,7 @@ Bot HTTP 接口通过路径前缀 `/v1` 标明协议版本。裁判分别向两�
 | `POST /v1/matches/{run_id}/turns/{turn}` | 200 毫秒内返回 `200` 和当前回合的 `turn`、`cmd`。超时、格式无效或连接失败记 1 次错误 |
 | `POST /v1/matches/{run_id}/end` | 时限 1 秒，超时或失败维持已确定的结果 |
 
-决赛回合消息包含 `latent` 倒计时网格和 `latent_regions`。`latent_regions` 将潜像区域编号映射到其格子下标数组，下标为 `y * size + x`。Python SDK 同时使用两个字段恢复潜像，以便模拟显影和整块作废。
+初赛回合消息的 `active_station` 为本回合点亮的加速站中心，`lead_turns`、`time_us` 为双方已累计的领先回合数和响应微秒数。初赛请求只接受一个方向字符 `U`、`D`、`L` 或 `R`，停机期间照常收集回复。格式正确的反向命令沿用原方向。
 
 本局累计 10 次错误或 Bot 自身退出均触发技术判负，因自身内存超限被终止按退出处理。由平台导致的容器启动失败或运行条件故障按第 3.3 节报告 `platform_error`。
 

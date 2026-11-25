@@ -7,7 +7,7 @@ from tempfile import NamedTemporaryFile
 
 from . import VERSION
 from .protocol import board_status, dumps, grid_rows, json_object
-from .rules import PARAMS
+from .rules import PARAMS, RULESET
 
 
 def _write_text(path, text):
@@ -49,7 +49,9 @@ def write_replay_index(directory):
                 replay = json_object(raw)
             except (OSError, ValueError, RecursionError):
                 continue
-            if replay.get('version') == VERSION:
+            params = replay.get('params')
+            if (replay.get('version') == VERSION and replay.get('stage') == RULESET and isinstance(params, dict)
+                    and params.get('station_period') == PARAMS['station_period']):
                 encoded = b64encode(compress(raw, mtime=0)).decode('ascii')
                 entries.append('  ' + dumps([path.name, encoded]))
 

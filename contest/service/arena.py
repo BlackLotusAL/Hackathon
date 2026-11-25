@@ -10,9 +10,10 @@ from engine import VERSION
 from engine.mapgen import load_map
 from engine.protocol import RUN_ID, dumps, json_object
 from engine.replay import game_result
+from engine.rules import RULESET
 from engine.verification import VerificationError, check_fields, read_referee_log, verify_replay
 
-from .domain import BASELINES, DUEL_PHASE, GAME_TIE_ISSUE, PLATFORM_ERRORS, ZONE, ContestError, encode
+from .domain import ACTIVE_DUELS, BASELINES, DUEL_PHASE, GAME_TIE_ISSUE, PLATFORM_ERRORS, ZONE, ContestError, encode
 from .duels import insert_attempt, settle_duel
 
 
@@ -107,9 +108,9 @@ def run_query_results(run_ids, payload):
 POLL_INTERVAL = 0.5
 POLL_LEASE = 15
 
-_OPEN_RUNS = '''
+_OPEN_RUNS = f'''
     FROM current_runs r JOIN games g ON g.id = r.game JOIN duels d ON d.id = g.duel
-    WHERE d.closed_at IS NULL
+    WHERE d.closed_at IS NULL AND {ACTIVE_DUELS}
 '''
 _POLLABLE_RUNS = _OPEN_RUNS + '''
     AND r.submission IN ('accepted', 'unconfirmed') AND r.arena_result IS NULL AND r.review IS NULL
@@ -172,7 +173,7 @@ def _submission_candidates(connection, limit):
     if active is None:
         active = connection.execute(f'''
             SELECT {DUEL_PHASE} AS phase FROM duels d
-            WHERE d.closed_at IS NULL ORDER BY d.id LIMIT 1
+            WHERE d.closed_at IS NULL AND {ACTIVE_DUELS} ORDER BY d.id LIMIT 1
         ''').fetchone()
     if active is None:
         return []
@@ -317,9 +318,8 @@ class ExecutionService:
             if duel is None:
                 return
             if manifest is not None:
-                first, second = manifest['bots']
-                same_team = first['team_id'] == second['team_id']
-                if review == 'effective' and manifest['result']['winner'] is None and not same_team:
+                if (review == 'effective' and manifest['result']['winner'] is None
+                        and manifest['result'].get('reason') != 'double_loss'):
                     review, issue = 'awaiting_ruling', GAME_TIE_ISSUE
                 commits = encode({bot['team_id']: bot['commit'] for bot in manifest['bots'] if 'commit' in bot})
                 started = manifest.get('duel_started_at') if duel['kind'].endswith('-ladder') else None
@@ -374,6 +374,8 @@ def review_archive(root, request, state, *, ladder):
         raise VerificationError('执行编号无效')
     path = root / 'runs' / run_id
     try:
+        if request['rules'] != RULESET:
+            raise VerificationError('对局须使用当前赛题规则')
         manifest = json_object((path / 'match.json').read_bytes())
         encode(manifest)  # Reject non-finite values before recording the evidence.
         bots = manifest['bots']
@@ -406,15 +408,14 @@ def review_archive(root, request, state, *, ladder):
         version = result.get('version')
         if version != VERSION:
             raise VerificationError(f'单局清单的版本不受支持（{version!r}）')
-        board, digest = load_map(request['config']['map'], request['rules'])
+        board, digest = load_map(request['config']['map'])
         check_fields(result, {'map': board['id'], 'map_sha256': digest}, 'match.json')
         replay = json_object((path / 'replay.json').read_bytes())
         log = read_referee_log(path / 'log.jsonl')
         game = verify_replay(replay, board=board, log=log)
-        recomputed = game_result(game)
-        if 'turns' not in result:
-            recomputed.pop('turns')
-        check_fields(result, recomputed, 'match.json')
+        # If Arena omits the settled round count, use the verified replay.
+        result.setdefault('turns', game.turn)
+        check_fields(result, game_result(game), 'match.json')
         return manifest
     except VerificationError:
         raise

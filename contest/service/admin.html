@@ -168,7 +168,7 @@
     .replay-link { padding: 2px 8px; font-family: var(--mono); white-space: nowrap; }
     #match-replay {
       --replay-cell: #e6e8e3; --replay-defect: #3b4149; --replay-key: #f2c200;
-      --replay-order: #a26100; --replay-boost: #8546bd;
+      --replay-station: #8546bd;
       scroll-margin-top: 112px;
     }
     .replay-layout { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 24px; align-items: start; }
@@ -186,21 +186,19 @@
     .replay-controls button { padding: 5px 9px; }
     .replay-controls [aria-pressed="true"] { background: var(--accent); color: #15171a; border-color: var(--accent); }
     .replay-detail { padding: 6px 9px; border-left: 3px solid var(--line); background: var(--surface); font-size: 13px; }
-    #replay-order[data-active] { border-color: var(--replay-order); }
-    #replay-boost[data-active] { border-color: var(--replay-boost); }
+    #replay-station { border-color: var(--replay-station); }
     .replay-log { border-top: 1px solid var(--ink); }
     .replay-log h3 { margin: 6px 0 2px; font-size: 13px; }
     .replay-log ol { margin: 0; padding: 0; list-style: none; max-height: 224px; overflow-y: auto; font-size: 13px; }
     .replay-log li { display: flex; gap: 8px; padding: 3px 0; border-bottom: 1px solid var(--line); }
     @media (prefers-color-scheme: dark) {
-      #match-replay { --replay-cell: #303437; --replay-defect: #737985; --replay-order: #ffc266; --replay-boost: #c593ff; }
+      #match-replay { --replay-cell: #303437; --replay-defect: #737985; --replay-station: #c593ff; }
     }
 
     @media (max-width: 800px) {
       .top .wrap { gap: 12px; }
       .columns { grid-template-columns: minmax(0, 1fr); gap: 20px; }
       .duel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .duel-grid > [data-rules] { grid-column: 1 / -1; }
       .replay-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
     }
     @media (max-width: 570px) {
@@ -269,7 +267,6 @@
           <div class="duel-cell team-b">
             <label class="field">队伍 2<input id="manual-team-b" class="mono" type="text" pattern="team[0-9]{3}" placeholder="team002" autocomplete="off" required></label>
           </div>
-          <div class="duel-cell" data-rules></div>
         </div>
         <div class="duel-submit">
           <button id="manual-start" class="primary" type="submit">发起对决</button>
@@ -324,8 +321,7 @@
             <button type="button" data-speed="12" aria-pressed="true" aria-label="每秒 12 回合">12</button>
             <button type="button" data-speed="40" aria-pressed="false" aria-label="每秒 40 回合">40</button>
           </div>
-          <p class="replay-detail" id="replay-boost"></p>
-          <p class="replay-detail" id="replay-order"></p>
+          <p class="replay-detail" id="replay-station"></p>
           <div class="replay-log"><h3>最近事件</h3><ol id="replay-events"></ol></div>
         </div>
       </div>
@@ -341,15 +337,12 @@
         <header class="section-head"><h2 id="batch-title">新建批次</h2></header>
         <div class="panel">
           <form id="batch-form" class="form-stack">
-            <div class="input-row">
-              <div data-rules></div>
-              <label class="field">批次类型
-                <select id="batch-type">
-                  <option value="independent">独立批次</option>
-                  <option id="batch-official" value="official">正式初赛</option>
-                </select>
-              </label>
-            </div>
+            <label class="field">批次类型
+              <select id="batch-type">
+                <option value="independent">独立批次</option>
+                <option id="batch-official" value="official">正式初赛</option>
+              </select>
+            </label>
             <label id="batch-id-field" class="field">批次编号<input id="batch-id" class="mono" type="text" pattern="load-[A-Za-z0-9_\-]{1,40}" placeholder="load-trial-1" autocomplete="off" required></label>
             <fieldset class="team-selection">
               <legend>配置方式</legend>
@@ -442,7 +435,6 @@
         <div class="panel">
           <form id="check-form" class="form-stack">
             <label class="field">Bot 服务地址<input id="check-target" class="mono" type="url" placeholder="http://127.0.0.1:18101" autocomplete="off" required></label>
-            <div data-rules></div>
             <button id="check-start" class="primary" type="submit">开始自检</button>
           </form>
         </div>
@@ -483,15 +475,6 @@
   </section>
 </main>
 
-<template id="rules-editor">
-  <fieldset>
-    <legend>对决规则</legend>
-    <div class="segment">
-      <label><input type="radio" name="rules" value="prelim" checked><span>初赛</span></label>
-      <label><input type="radio" name="rules" value="final"><span>决赛</span></label>
-    </div>
-  </fieldset>
-</template>
 
 <script src="/admin/replay.js"></script>
 <script>
@@ -504,7 +487,7 @@
   const teamId = /^team[0-9]{3}$/;
   const prelimEnabled = document.body.dataset.phase === 'prelim';
   const tabs = Array.from(document.querySelectorAll('.tabs a'));
-  const rulesLabel = {prelim: '初赛', final: '决赛'};
+  const rules = 'prelim';
   const stateLabel = {
     empty: '待配置', roster_imported: '待编排', running: '执行中',
     awaiting_confirmation: '等待确认赛果', confirmed: '赛果已确认', finished: '已完成', stopped: '已结束'
@@ -525,10 +508,6 @@
   let replayRequest;
   let replayPage = 0;
 
-  for (const element of document.querySelectorAll('[data-rules]')) {
-    element.append(node('rules-editor').content.cloneNode(true));
-  }
-  const formRules = id => node(id).elements.rules.value;
   const isOfficialBatch = () => node('batch-type').value === 'official';
 
   function teamEditor() {
@@ -667,7 +646,7 @@ function renderAttention(attention, path) {
   }
 
   function syncBatchConfiguration() {
-    const allowed = prelimEnabled && formRules('batch-form') === 'prelim';
+    const allowed = prelimEnabled;
     node('batch-official').hidden = node('batch-official').disabled = !allowed;
     if (!allowed && isOfficialBatch()) node('batch-type').value = 'independent';
     const official = isOfficialBatch();
@@ -698,7 +677,7 @@ function renderAttention(attention, path) {
       officialState = official.state;
       officialDraft = officialState === 'roster_imported' ? official.teams : [];
       syncBatchConfiguration();
-      const options = history.batches.map(batch => [batch.batch_id, `${batch.batch_id} · ${rulesLabel[batch.rules]}`]);
+      const options = history.batches.map(batch => [batch.batch_id, batch.batch_id]);
       if (officialState !== 'empty') options.unshift(['official', '正式初赛']);
       if (!options.some(([id]) => id === selectedBatch)) selectBatch(options[0]?.[0] || '');
       selectOptions('batch-history', options, selectedBatch);
@@ -773,7 +752,9 @@ function renderAttention(attention, path) {
 
   function renderRulingSelection() {
     const item = rulingSelection();
-    selectOptions('ruling-winner', [['', '请选择胜方'], ...(item ? item.sides.map(side => [side, side]) : [])]);
+    const choices = !item ? [] : item.sides[0] === item.sides[1] ? [['0', '蓝方'], ['1', '红方']] :
+      item.sides.map(side => [side, side]);
+    selectOptions('ruling-winner', [['', '请选择胜方'], ...choices]);
     node('ruling-winner').disabled = !item;
     node('ruling-detail').textContent = item ? `${item.issue} · ${item.sides.join(' 对 ')}` : '';
     syncControls();
@@ -796,7 +777,7 @@ function renderAttention(attention, path) {
 
   async function renderManualDuels(data, current) {
     const options = data.duels.map(duel => [
-      duel.duel_id, `${duel.sides.join(' / ')} · ${rulesLabel[duel.rules]} · ${formatTime(duel.accepted_at)}`
+      duel.duel_id, `${duel.sides.join(' / ')} · ${formatTime(duel.accepted_at)}`
     ]);
     if (!options.some(([id]) => id === selectedManual)) selectManual(options[0]?.[0] || '');
     selectOptions('manual-duel', options, selectedManual);
@@ -875,7 +856,7 @@ function renderAttention(attention, path) {
     let summary = manualRunning ? '等待结算' : '模拟已结束';
     if (result) {
       const winner = sameTeam ? ['蓝方', '红方'][result.winner] : result.winner;
-      summary = winner ? `${winner} 获胜` : result.outcome === 'draw' ? '平局' : '双方判负';
+      summary = winner ? `${winner} 获胜` : '双方判负';
       if (sameTeam) summary += ` · 蓝 ${result.games_won[0]} : ${result.games_won[1]} 红`;
     }
     node('manual-result').textContent = summary;
@@ -964,7 +945,7 @@ function post(path, data) {
     const verdict = node('check-verdict');
     verdict.dataset.level = failures ? 'fail' : warnings ? 'warn' : 'ok';
     node('check-result').textContent = failures ? `${failures} 项未通过` : warnings ? `通过，${warnings} 项提醒` : '全部通过';
-    node('check-report-target').textContent = `${report.name} · ${rulesLabel[report.rules]}`;
+    node('check-report-target').textContent = report.name;
     verdict.hidden = false;
 
     const statuses = {ok: '通过', warn: '提醒', fail: '失败'};
@@ -994,7 +975,7 @@ function post(path, data) {
     node('check-verdict').hidden = node('check-items').hidden = true;
     message('check-status', '自检中…');
     try {
-      const report = await post('/admin/check', {target: node('check-target').value, rules: formRules('check-form')});
+      const report = await post('/admin/check', {target: node('check-target').value, rules});
       message('check-status', '');
       renderCheck(report);
     } catch (error) {
@@ -1044,7 +1025,7 @@ function post(path, data) {
   }
 
   node('batch-form').addEventListener('change', event => {
-    if (event.target.name === 'rules' || event.target.id === 'batch-type') syncBatchConfiguration();
+    if (event.target.id === 'batch-type') syncBatchConfiguration();
   });
   submit('batch-form', 'batch-message', () => {
     const data = batchEditor.read();
@@ -1055,7 +1036,7 @@ function post(path, data) {
       });
     } else {
       const batch = encodeURIComponent(node('batch-id').value);
-      change(`${loadTests}/${batch}`, '批次已创建', {...data, rules: formRules('batch-form')}, {
+      change(`${loadTests}/${batch}`, '批次已创建', {...data, rules}, {
         ...options, onSuccess: result => selectBatch(result.batch_id)
       });
     }
@@ -1083,7 +1064,7 @@ function post(path, data) {
 
   submit('manual-form', 'manual-message', () => {
     const sides = [node('manual-team-a').value, node('manual-team-b').value];
-    change(manualDuels, '对决已创建，等待 Arena 受理', {sides, rules: formRules('manual-form')}, {
+    change(manualDuels, '对决已创建，等待 Arena 受理', {sides, rules}, {
       messageId: 'manual-message', onSuccess: result => selectManual(result.duel_id)
     });
   });

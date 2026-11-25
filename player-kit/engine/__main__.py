@@ -15,10 +15,10 @@ from .replay import write_replay_index
 BOTS_DIR = KIT_ROOT / 'bots'
 REASONS = {
     'limit': '得分',
-    'bonus': '订单奖励',
     'lead_turns': '领先回合数',
     'time': '累计响应时间',
-    'tie': '四项指标相同',
+    'tie': '三项指标相同，待裁定',
+    'double_loss': '双方同时技术判负',
     'startup': 'Bot 未就绪',
     'crash': 'Bot 退出',
     'errors': '累计错误达到上限',
@@ -48,9 +48,11 @@ def main(argv=None):
 
     print(f'完成 {game.turn}/{game.max_turns} 回合')
     for seat, name in enumerate(players):
-        print(f'  {seat} 号方 {name}  得分 {game.score(seat)}  订单奖励 {game.bonus[seat]}'
+        print(f'  {seat} 号方 {name}  得分 {game.score(seat)}'
               f'  领先 {game.lead_turns[seat]} 回合  响应时间 {game.time_us[seat]} 微秒  错误 {errors[seat]} 次')
     outcome = '未判定胜方' if game.winner is None else f'{game.winner} 号方 {players[game.winner]} 获胜'
+    if game.reason == 'double_loss':
+        outcome = '双方各记一负'
     print(f'{outcome}（{REASONS[game.reason]}）')
     print(f'回放已保存至 {replay_path}')
     try:

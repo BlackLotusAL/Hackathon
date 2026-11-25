@@ -7,7 +7,7 @@ from service.server import Contest
 
 from .helpers import (TEAMS, Bot, HttpClient, MatchFixture, admin_headers, arena_archive,
                       case, contest_handler, http_arena, roster_workbook, run_query_payload,
-                      running_service, sealed_maps, wait_for, write_config, write_map_pools)
+                      plan_duel, running_service, wait_for, write_config, write_map_pools)
 
 
 class HttpServiceTests(MatchFixture):
@@ -59,117 +59,95 @@ class HttpServiceTests(MatchFixture):
                 self.assertNotIn(next_request['run_id'], run_ids)
                 wait_for(lambda: len(arena.submitted), lambda count: count == 13)
 
-    @case('L0-035', '手动对决可同队模拟，按所选规则执行，并从后台读取归档回放')
-    def test_manual_duels_reach_arena_with_selected_rules(self):
-        archive = self.root / 'archives'
+    @case('L0-035', '手动对决使用最新初赛规则，支持同队模拟及后台回放')
+    def test_manual_duels_reach_arena_with_current_rules(self):
         database = self.root / 'contest.sqlite'
-        pools = write_map_pools(self.root / 'config/maps.json', 'final')
-        path = '/admin/duels'
-        with http_arena(None) as (arena_url, received, arena):
+        archive = self.root / 'archive'
+        with http_arena(200) as (arena_url, received, arena):
             config = write_config(
-                pools.with_name('contest.json'), maps=pools.name, port=0, db=str(database),
-                host='127.0.0.1', arena_url=arena_url, archive_root=str(archive), phase='prelim',
+                self.root / 'contest.json', db=str(database), host='127.0.0.1', arena_url=arena_url,
+                archive_root=str(archive), phase='prelim', port=0,
             )
-            with running_service(config) as address:
-                client = HttpClient(address)
-                admin = HttpClient(address, headers=admin_headers())
-                prelim = {'sides': TEAMS[:1] * 2, 'rules': 'prelim'}
-                final = {'sides': TEAMS, 'rules': 'final'}
-                self.assertEqual(client.post(path, prelim)[0], 401)
-                self.assertEqual(admin.post(path, dict(final, sides=[TEAMS[0], 'bot001']))[0], 400)
+            with running_service(config) as url:
+                client = HttpClient(url)
+                admin = HttpClient(url, headers=admin_headers())
+                path = '/admin/duels'
+                self.assertEqual(client.post(path, {})[0], 401)
+                self.assertEqual(admin.post(path, {'sides': TEAMS, 'rules': 'final'})[0], 400)
+                check = {'target': 'http://127.0.0.1:1', 'rules': 'final'}
+                self.assertEqual(admin.json('/admin/check', check, method='POST', status=400)['code'],
+                                 'INVALID_RULES')
+                self.assertEqual(admin.post(path, {'sides': [TEAMS[0], 'bot001'], 'rules': 'prelim'})[0], 400)
                 self.assertEqual(admin.request('/admin/replay.js')[0], 200)
+                body = {'sides': [TEAMS[0], TEAMS[0]], 'rules': 'prelim'}
+                duel_id = admin.json(path, body, method='POST', status=202)['duel_id']
+                detail_path = f'{path}/{duel_id}'
+                detail = admin.json(detail_path)
+                self.assertEqual((detail['rules'], detail['sides'], len(detail['attempts'])),
+                                 ('prelim', body['sides'], 2))
+                self.assertEqual(client.request(f'/contest/v1/duels/{duel_id}/result')[0], 404)
 
-                def submitted():
+                requests = []
+                while len(requests) < 2:
                     event = received.get(timeout=5)
-                    while event['path'] != '/arena/v1/runs':
-                        event = received.get(timeout=5)
-                    return event['body']
+                    if event['path'] == '/arena/v1/runs':
+                        requests.append(event['body'])
+                first, second = requests
+                self.assertEqual((first['duel_id'], first['rules']), (duel_id, 'prelim'))
+                self.assertEqual(first['bots'], body['sides'])
+                self.assertEqual(set(first['config']['map']), {'seed'})
+                self.assertEqual(second, dict(first, run_id=second['run_id']))
 
-                duel_ids = []
-                for body, games in ((prelim, 2), (final, 6)):
-                    accepted = admin.json(path, body, method='POST', status=202)
-                    duel_id = accepted['duel_id']
-                    duel_ids.append(duel_id)
-                    detail_path = f'{path}/{duel_id}'
-                    detail = admin.json(detail_path)
-                    self.assertEqual((detail['rules'], detail['sides'], len(detail['attempts'])),
-                                     (body['rules'], body['sides'], games))
-                    self.assertEqual(client.request(f'/contest/v1/duels/{duel_id}/result')[0], 404)
-                    if body == prelim:
-                        self.assertEqual(admin.json(path, final, method='POST', status=409)['code'], 'PHASE_BUSY')
+                started = '2026-11-19T15:05:00+08:00'
+                replay_paths = [f"/admin/runs/{request['run_id']}/replay" for request in requests]
+                self.assertEqual(admin.request(replay_paths[0])[0], 404)
+                _, _, winning = self.judge_archive(second, [Bot('U'), Bot('D', exit_after_reply=True)],
+                                                   started_at=started, archive_root=archive)
+                arena.set_state(second['run_id'], 'finished')
+                wait_for(lambda: admin.request(replay_paths[1])[0], lambda status: status == 200)
+                self.assertEqual(admin.json(detail_path)['state'], 'in_progress')
+                _, _, both_lost = self.judge_archive(first, started_at=started, archive_root=archive)
+                self.assertEqual(both_lost['result']['reason'], 'double_loss')
+                arena.set_state(first['run_id'], 'finished')
+                settled = wait_for(lambda: admin.json(detail_path), lambda duel: duel['state'] == 'finished')
+                self.assertEqual(settled['result']['runs'], [request['run_id'] for request in requests])
+                self.assertEqual(settled['result']['winner'], 0)
+                self.assertEqual(settled['result']['games_won'], {'0': 1, '1': 0})
+                self.assertTrue(all(run['has_replay'] for run in settled['attempts']))
+                self.assertEqual(client.request(replay_paths[0])[0], 401)
+                self.assertEqual(admin.json(replay_paths[0]), both_lost)
+                self.assertEqual(admin.json(replay_paths[1]), winning)
+                self.assertEqual(admin.json('/admin/rulings')['pending'], [])
+                self.assertEqual([row['duel_id'] for row in admin.json(path)['duels']], [duel_id])
 
-                    request = submitted()
-                    self.assertEqual((request['duel_id'], request['rules']), (duel_id, body['rules']))
-                    self.assertCountEqual(request['bots'], body['sides'])
-                    map_fields = {'seed'} if body == prelim else {'file', 'sha256'}
-                    self.assertEqual(set(request['config']['map']), map_fields)
-
-                    run_id = request['run_id']
-                    replay_path = f'/admin/runs/{run_id}/replay'
-                    self.assertEqual(admin.request(replay_path)[0], 404)
-                    if body == prelim:
-                        second = submitted()
-                        self.assertEqual(second, dict(request, run_id=second['run_id']))
-                        second_replay = f"/admin/runs/{second['run_id']}/replay"
-                        started = '2026-11-19T15:05:00+08:00'
-                        _, _, winning = self.judge_archive(second, [Bot('U'), Bot('D', exit_after_reply=True)],
-                                                           started_at=started, archive_root=archive)
-                        arena.set_state(second['run_id'], 'finished')
-                        wait_for(lambda: admin.request(second_replay)[0], lambda status: status == 200)
-                        self.assertEqual(admin.json(detail_path)['state'], 'in_progress')
-
-                        _, _, drawn = self.judge_archive(request, started_at=started, archive_root=archive)
-                        self.assertIsNone(drawn['result']['winner'])
-                        arena.set_state(run_id, 'finished')
-                        settled = wait_for(lambda: admin.json(detail_path), lambda duel: duel['state'] == 'finished')
-                        self.assertEqual(settled['result']['runs'], [run_id, second['run_id']])
-                        self.assertEqual(settled['result']['winner'], 0)
-                        self.assertEqual(settled['result']['games_won'], {'0': 1, '1': 0})
-                        self.assertTrue(all(run['has_replay'] for run in settled['attempts']))
-                        self.assertEqual(client.request(replay_path)[0], 401)
-                        self.assertEqual(admin.json(replay_path), drawn)
-                        self.assertEqual(admin.json(second_replay), winning)
-                        self.assertEqual(admin.json('/admin/rulings')['pending'], [])
-                        continue
-
-                    bots = [{'team_id': team, 'commit': f'{index:040x}', 'state': 'failed'}
-                            for index, team in enumerate(request['bots'], 1)]
-                    arena_archive(archive / 'runs' / run_id, bots, state='build_failed')
-                    arena.set_state(run_id, 'build_failed')
-                    settled = wait_for(lambda: admin.json(detail_path), lambda duel: duel['state'] == 'finished')
-                    self.assertEqual(settled['result']['games_lost'], dict.fromkeys(TEAMS, games))
-                    self.assertEqual(settled['result']['build_run_id'], run_id)
-                    self.assertEqual(admin.request(replay_path)[0], 404)
-                    self.assertFalse(settled['attempts'][0]['has_replay'])
-
-                self.assertEqual([duel['duel_id'] for duel in admin.json(path)['duels']], duel_ids[::-1])
-                stopped_id = admin.json(path, dict(final, sides=prelim['sides']), method='POST', status=202)['duel_id']
+                stopped_id = admin.json(path, body, method='POST', status=202)['duel_id']
                 admin.json(f'{path}/{stopped_id}/stop', method='POST')
                 self.assertEqual(admin.json(f'{path}/{stopped_id}')['state'], 'stopped')
                 self.assertEqual(admin.json('/admin/prelim/progress')['state'], 'empty')
                 found = Contest(database).duels.ladder_submissions(TEAMS, '1970-01-01T00:00:00+08:00')
                 self.assertEqual(found['duels'], [])
 
-    @case('L0-030', '正式决赛需要固定地图池，只受理队伍之间的对决')
-    def test_final_duels_require_a_fixed_pool_and_two_teams(self):
-        db = self.root / 'final.sqlite'
-        path = '/contest/v1/duels'
-        client = HttpClient(contest_handler(Contest(db, phase='final')))
-        self.assertEqual(client.json(path, {'sides': TEAMS}, method='POST', status=503)['code'],
-                         'MAP_POOL_UNAVAILABLE')
-
-        maps = sealed_maps('final')
-        contest = Contest(db, {'final': maps}, phase='final')
+    @case('L0-030', '旧赛段配置和待执行记录不会进入当前赛程')
+    def test_retired_stage_does_not_enter_current_schedule(self):
+        db = self.root / 'contest.sqlite'
+        with self.assertRaisesRegex(ValueError, 'phase'):
+            Contest(db, phase='final')
+        contest = Contest(db)
+        plan_duel(contest, 'duel-retired', 'final-ladder')
         client = HttpClient(contest_handler(contest))
-        self.assertEqual(client.json(path, {'sides': [TEAMS[0], 'bot002']}, method='POST', status=400)['code'],
-                         'INVALID_DUEL')
+        path = '/contest/v1/duels'
+        self.assertEqual(client.request(path + '/duel-retired/status')[0], 404)
         duels = [client.json(path, {'sides': sides}, method='POST', status=202)['duel_id']
                  for sides in (TEAMS, TEAMS[::-1])]
         self.assertEqual(len(set(duels)), 2)
-
         found = contest.duels.ladder_submissions(TEAMS, '1970-01-01T00:00:00+08:00')['duels']
         self.assertEqual([duel['duel_id'] for duel in found], duels[:1])
-        self.assertEqual([contest.runs.claim()['duel_id'] for _ in duels], duels)
+        claims = [contest.runs.claim() for _ in duels]
+        self.assertEqual([request['duel_id'] for request in claims], duels)
+        self.assertTrue(all(request['rules'] == 'prelim' for request in claims))
+        with contest.database.transaction(write=False) as connection:
+            saved = connection.execute("SELECT closed_at FROM duels WHERE duel_id = 'duel-retired'").fetchone()
+            self.assertIsNone(saved['closed_at'])
 
     @case('L0-014', 'Portal 仅提交双方并获得新编号，校验两条查询及 Arena 查询响应')
     def test_portal_contract_and_arena_observation_validation(self):

@@ -7,6 +7,7 @@ import random
 from . import mapgen
 from .protocol import dumps, json_object
 from .replay import game_result
+from .rules import RULESET
 from .verification import read_referee_log, verify_replay
 
 
@@ -22,9 +23,8 @@ def generate_maps(args):
     for board in maps:
         defects = sum(row.count('#') for row in board['terrain'])
         keys = sum(row.count('*') for row in board['terrain'])
-        print('%s  缺陷 %d 格  关键图形区 %d 格  订单区域 %d 个  道具刷新点 %s' % (
-            board['id'], defects, keys, len(board['orders']),
-            ' '.join('(%d,%d)' % tuple(point) for point in board['boost_points'])))
+        points = ' '.join('(%d,%d)' % tuple(point) for point in board['boost_points'])
+        print(f"{board['id']}  缺陷 {defects} 格  关键图形区 {keys} 格  加速标记点 {points}")
         print(mapgen.draw(board) + '\n')
 
 
@@ -47,7 +47,7 @@ def main(argv=None):
     maps = commands.add_parser('mapgen', help='生成天梯或测试用随机地图')
     maps.add_argument('--seed', type=int, default=None, help='起始种子；不填则随机')
     maps.add_argument('--count', type=int, default=1)
-    maps.add_argument('--stage', default='prelim', choices=['prelim', 'final'])
+    maps.add_argument('--stage', default=RULESET, choices=(RULESET,))
     maps.add_argument('--out', type=Path, help='保存为 JSON 数组。不填则在终端绘制')
     maps.set_defaults(handler=generate_maps)
     replay = commands.add_parser('verify-replay', help='独立复核正式回放')

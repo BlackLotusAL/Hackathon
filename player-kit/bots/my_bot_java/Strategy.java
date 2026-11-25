@@ -23,11 +23,19 @@ public final class Strategy {
                 if (d == (forward ^ 1)) {
                     continue;
                 }
-                int x = me.x() + DX[d];
-                int y = me.y() + DY[d];
-                if (x >= 0 && x < init.size() && y >= 0 && y < init.size()
-                        && init.terrain().get(y).charAt(x) != '#'
-                        && state.contour().get(y).charAt(x) != '0' + init.seat()) {
+                int x = me.x(), y = me.y();
+                boolean safe = true;
+                int steps = init.moveSteps(state.turn(), x, y);
+                for (int i = 0; i < steps; i++) {
+                    x += DX[d];
+                    y += DY[d];
+                    if (x < 0 || x >= init.size() || y < 0 || y >= init.size()
+                            || init.terrain().get(y).charAt(x) == '#' || state.contour().get(y).charAt(x) == '0' + init.seat()) {
+                        safe = false;
+                        break;
+                    }
+                }
+                if (safe) {
                     return String.valueOf(DIRECTIONS.charAt(d));
                 }
             }

@@ -4,7 +4,7 @@ from .helpers import (TEAMS, ArenaStub, Bot, HttpClient, MatchFixture, arena_arc
 from service.arena import review_archive
 from service.duels import EffectiveGame, settle
 from service.server import Contest, ContestWorker
-from engine.core import TIEBREAK_METRICS
+from engine.rules import TIEBREAK_METRICS
 from engine.protocol import dumps
 from engine.replay import game_result
 from engine.verification import VerificationError, verify_replay
@@ -52,9 +52,10 @@ class MatchSettlementTests(MatchFixture):
         ])
         self.assertEqual(replay['frames'][-1]['turn'], 8)
         self.assertEqual(manifest['result']['time_us'], [9978, 8036])
-        self.assertEqual(verify_replay(replay).winner, 1)
+        self.assertIsNone(verify_replay(replay).winner)
+        self.assertEqual(manifest['result']['reason'], 'double_loss')
 
-    @case('L0-005', '正式对决三比三按四项指标顺序决胜')
+    @case('L0-005', '正式对决三比三按三项指标顺序决胜')
     def test_formal_tiebreak_order_and_all_equal(self):
         for deciding in (*TIEBREAK_METRICS, None):
             with self.subTest(deciding=deciding):
@@ -65,7 +66,7 @@ class MatchSettlementTests(MatchFixture):
                     for key in TIEBREAK_METRICS[TIEBREAK_METRICS.index(deciding) + 1:]:
                         metrics[key] = [20, 10] if key == 'time_us' else [10, 20]
                 runs = [EffectiveGame(i, f'run-{i}.1', {'bots': [{'team_id': team} for team in TEAMS],
-                                                      'result': dict(metrics, winner=i % 2)}) for i in range(1, 7)]
+                                                      'result': dict(metrics, winner=i % 2, turns=600)}) for i in range(1, 7)]
                 settled = settle(TEAMS, False, runs)
                 if deciding is None:
                     self.assertIsNone(settled)
@@ -75,95 +76,144 @@ class MatchSettlementTests(MatchFixture):
                     self.assertEqual(settled['games_won'], dict.fromkeys(TEAMS, 3))
                     self.assertEqual(settled['games_lost'], dict.fromkeys(TEAMS, 3))
 
-    @case('L0-006', '统一接口受理决赛并固定六局计划，重启后照原计划结算')
-    def test_final_submitted_by_portal_finishes_using_its_stored_plan(self):
-        maps = sealed_maps('final')
+    @case('L0-043', '天梯开局同时技术判负的两局全部生效，双方各记两负')
+    def test_double_losses_are_effective(self):
+        contest = Contest(self.root / 'contest.sqlite')
+        arena = ArenaStub()
+        worker = ContestWorker(contest, self.root, arena)
+        duel_id = contest.duels.accept({'sides': TEAMS})['duel_id']
+        for _ in range(2):
+            self.assertTrue(worker.submit_next())
+            request = arena.submitted[-1]
+            _, manifest, _ = self.judge_archive(request, started_at=STARTED)
+            self.assertEqual((manifest['result']['winner'], manifest['result']['reason'],
+                              manifest['result']['turns']), (None, 'double_loss', 0))
+            self.poll_and_review(arena, worker, request['run_id'], 'finished')
+        self.assertFalse(contest.rulings.pending()['pending'])
+        response = contest.duels.result(duel_id)
+        result = response['result']
+        self.assertEqual(response['side_results'], dict.fromkeys(TEAMS, 'loss'))
+        self.assertEqual((result['outcome'], result['winner']), ('double_loss', None))
+        self.assertEqual(result['games_won'], dict.fromkeys(TEAMS, 0))
+        self.assertEqual(result['games_lost'], dict.fromkeys(TEAMS, 2))
+        self.assertTrue(all(g['winner'] is None and g['reason'] == 'double_loss' for g in result['games']))
+
+    @case('L0-044', '初赛两胜四负及天梯一比一只汇总打满回合的单局')
+    def test_only_completed_games_contribute_to_tiebreaks(self):
+        def played(n, teams, winner, turns, score):
+            reason = 'double_loss' if winner is None else 'limit' if turns == 600 else 'crash'
+            return EffectiveGame(n, f'run-{n}.1', {
+                'bots': [{'team_id': team} for team in teams],
+                'result': {'winner': winner, 'reason': reason, 'turns': turns, 'score': score,
+                           'lead_turns': [0, 0], 'time_us': [5, 5]},
+            })
+
+        early = played(1, TEAMS, 0, 599, [999, 0])
+        full = played(2, TEAMS[::-1], 0, 600, [12, 10])
+        ladder = settle(TEAMS, True, [early, full])
+        self.assertEqual((ladder['winner'], ladder['tiebreak']), (TEAMS[1], 'score'))
+        no_full_games = [early, played(2, TEAMS[::-1], 0, 599, [42, 24])]
+        self.assertIsNone(settle(TEAMS, True, no_full_games))
+        official = [early, full, played(3, TEAMS, 0, 1, [9, 9]),
+                    played(4, TEAMS[::-1], 0, 15, [10, 8]),
+                    played(5, TEAMS, None, 50, [100, 9]), played(6, TEAMS[::-1], None, 0, [9, 9])]
+        result = settle(TEAMS, False, official)
+        self.assertEqual((result['winner'], result['games_won'], result['games_lost']),
+                         (TEAMS[1], dict.fromkeys(TEAMS, 2), dict.fromkeys(TEAMS, 4)))
+
+    @case('L0-046', '复核兼容 Arena 清单省略回合数')
+    def test_review_restores_turns_from_replay(self):
+        request = self.request()
+        output, manifest, _ = self.judge_archive(request, [Bot('U', us=1000), Bot('D', us=2000)])
+        result = manifest['result']
+        result.pop('turns')
+        (output / 'match.json').write_text(dumps(manifest), encoding='utf-8')
+        reviewed = review_archive(self.root, request, 'finished', ladder=False)
+        self.assertEqual((reviewed['result']['turns'], reviewed['result']['reason']), (600, 'time'))
+
+    @case('L0-048', '同队初赛模拟全同后按出生点裁定，不登记平局')
+    def test_self_play_rulings_by_seat(self):
+        contest = Contest(self.root / 'contest.sqlite')
+        arena = ArenaStub()
+        worker = ContestWorker(contest, self.root, arena)
+        duel = contest.duels.accept_manual({'sides': [TEAMS[0], TEAMS[0]], 'rules': 'prelim'})['duel_id']
+        for seat in ('0', '1'):
+            self.assertTrue(worker.submit_next())
+            request = arena.submitted[-1]
+            self.judge_archive(request, [Bot('U', us=1000), Bot('D', us=1000)], started_at=STARTED)
+            self.poll_and_review(arena, worker, request['run_id'], 'finished')
+            pending, = contest.rulings.pending()['pending']
+            self.assertEqual((pending['scope'], pending['run_id']), ('game', request['run_id']))
+            contest.rulings.record('game', request['run_id'], seat, '按出生点裁定', operator='organizer')
+        pending, = contest.rulings.pending()['pending']
+        self.assertEqual((pending['scope'], pending['duel_id']), ('duel', duel))
+        contest.rulings.record('duel', duel, 0, '按出生点裁定', operator='organizer')
+        result = contest.duels.show(duel, manual=True)['result']
+        self.assertEqual((result['outcome'], result['winner'], result['games_won']), ('win', 0, {'0': 1, '1': 1}))
+
+    @case('L0-006', '固定三张正式地图后重启，仍按原六局计划和局序结算')
+    def test_formal_preliminary_duel_finishes_using_its_stored_plan(self):
+        maps = sealed_maps('prelim')
         db = self.root / 'contest.sqlite'
-        client = HttpClient(contest_handler(Contest(db, {'final': maps}, phase='final')))
-        duel_id = client.json(DUELS_PATH, {'sides': TEAMS}, method='POST', status=202)['duel_id']
-        contest = Contest(db, phase='prelim-ladder')
+        duel_id = 'duel-stored'
+        plan_duel(Contest(db, {'prelim': maps}, phase='prelim'), duel_id, 'prelim')
+        contest = Contest(db)
         arena = ArenaStub()
         worker = ContestWorker(contest, self.root, arena)
         client = HttpClient(contest_handler(contest))
-        game_results = []
         duel_path = f'{DUELS_PATH}/{duel_id}'
         self.assertEqual(client.json(DUELS_PATH, {'sides': TEAMS}, method='POST', status=409)['code'], 'PHASE_BUSY')
+        game_results = []
         for ordinal in range(6):
             self.assertTrue(worker.submit_next())
             request = arena.submitted[-1]
             run_id = request['run_id']
-            if ordinal == 0:
-                first_bots = request['bots']
-                self.assertCountEqual(first_bots, TEAMS)
-            self.assertEqual(request['bots'], first_bots if ordinal % 2 == 0 else first_bots[::-1])
-            self.assertEqual((request['rules'], request['config']['map']), ('final', maps[ordinal // 2]))
-            us = [1201 if team == 'team001' else 901 for team in request['bots']]
-            _, manifest, _ = self.judge_archive(
-                request, [Bot('U', us=us[0]), Bot('D', us=us[1], exit_after_reply=True)])
-            game_results.append({'ordinal': ordinal + 1, 'run_id': run_id, 'winner': request['bots'][0],
+            self.assertEqual(request['bots'], TEAMS if ordinal % 2 == 0 else TEAMS[::-1])
+            self.assertEqual((request['rules'], request['config']['map']), ('prelim', maps[ordinal // 2]))
+            winner_seat = int(ordinal == 5)
+            bots = [Bot(cmd, exit_after_reply=seat != winner_seat) for seat, cmd in enumerate(('U', 'D'))]
+            _, manifest, _ = self.judge_archive(request, bots)
+            game_results.append({'ordinal': ordinal + 1, 'run_id': run_id, 'winner': request['bots'][winner_seat],
                                  'score': dict(zip(request['bots'], manifest['result']['score']))})
-            self.poll_and_review(arena, worker, run_id, 'finished')
+            self.poll_and_review(arena, worker, run_id, 'finished', preliminary=True)
             if ordinal < 5:
                 self.assertEqual(client.json(duel_path + '/status')['state'], 'in_progress')
-                self.assertIsNone(client.json(duel_path + '/result')['result'])
-
         self.assertFalse(worker.submit_next())
-        self.assertEqual(len(arena.submitted), 6)
-        self.assertEqual(client.json(duel_path + '/status'), {'duel_id': duel_id, 'state': 'finished'})
         response = client.json(duel_path + '/result')
-        self.assertEqual(response['side_results'], {'team001': 'loss', 'team002': 'win'})
+        self.assertEqual(response['side_results'], {'team001': 'win', 'team002': 'loss'})
         result = response['result']
-        self.assertEqual(result['winner'], 'team002')
-        self.assertEqual(result['tiebreak'], 'time_us')
-        self.assertEqual(result['games_won'], dict.fromkeys(TEAMS, 3))
-        self.assertEqual(result['games_lost'], dict.fromkeys(TEAMS, 3))
+        self.assertEqual(result['games_won'], dict(zip(TEAMS, (4, 2))))
+        self.assertEqual(result['games_lost'], dict(zip(TEAMS, (2, 4))))
         self.assertEqual(result['games'], game_results)
         self.assertEqual(result['runs'], [game['run_id'] for game in game_results])
-        self.assertNotIn('previous_duel_ids', result)
         self.assertEqual(HttpClient(contest_handler(Contest(db))).json(duel_path + '/result'), response)
-        self.assertIn('duel_id', client.json(DUELS_PATH, {'sides': TEAMS}, method='POST', status=202))
 
-    @case('L0-016', '决赛规则的天梯对决同图两局换边，结算胜负和平局')
-    def test_final_ladder_settles_two_games_as_win_or_draw(self):
-        contest = Contest(self.root / 'ladder.sqlite', phase='final-ladder')
+    @case('L0-016', '天梯同图换边，双方各胜一局且无满局时可以裁定')
+    def test_ladder_waits_for_ruling_if_early_wins_split(self):
+        contest = Contest(self.root / 'ladder.sqlite')
         arena = ArenaStub()
         worker = ContestWorker(contest, self.root, arena)
-        client = HttpClient(contest_handler(contest))
-        previous = []
-        for number, winners in enumerate((TEAMS, [TEAMS[0], TEAMS[0]]), 1):
-            with self.subTest(winners=winners):
-                duel_id = client.json(DUELS_PATH, {'sides': TEAMS}, method='POST', status=202)['duel_id']
-                run_ids = []
-                for ordinal, winner in enumerate(winners):
-                    self.assertTrue(worker.submit_next())
-                    request = arena.submitted[-1]
-                    if ordinal == 0:
-                        first_request = request
-                        self.assertCountEqual(first_request['bots'], TEAMS)
-                    else:
-                        self.assertEqual(request['bots'], first_request['bots'][::-1])
-                        self.assertEqual(request['config'], first_request['config'])
-                    bots = [Bot(command, exit_after_reply=team != winner)
-                            for command, team in zip(('U', 'D'), request['bots'])]
-                    self.judge_archive(request, bots, started_at=STARTED)
-                    self.poll_and_review(arena, worker, request['run_id'], 'finished')
-                    run_ids.append(request['run_id'])
-                    if ordinal == 0:
-                        self.assertIsNone(contest.duels.show(duel_id)['result'])
-                response = client.json(f'{DUELS_PATH}/{duel_id}/result')
-                result = response['result']
-                self.assertEqual(result['runs'], run_ids)
-                self.assertEqual(result['started_at'], STARTED)
-                won = {team: winners.count(team) for team in TEAMS}
-                self.assertEqual(result['games_won'], won)
-                self.assertEqual(result['games_lost'], {team: 2 - won[team] for team in TEAMS})
-                self.assertEqual((result['outcome'], result['winner']),
-                                 ('draw', None) if won[TEAMS[0]] == 1 else ('win', TEAMS[0]))
-                self.assertEqual(response['side_results'],
-                                 dict.fromkeys(TEAMS, 'draw') if number == 1 else {'team001': 'win', 'team002': 'loss'})
-                self.assertEqual(result['previous_duel_ids'], previous)
-                previous = [duel_id]
-                self.assertFalse(worker.submit_next())
+        duel_id = contest.duels.accept({'sides': TEAMS})['duel_id']
+        run_ids = []
+        for seat_winner in TEAMS:
+            self.assertTrue(worker.submit_next())
+            request = arena.submitted[-1]
+            bots = [Bot(command, exit_after_reply=team != seat_winner)
+                    for command, team in zip(('U', 'D'), request['bots'])]
+            self.judge_archive(request, bots, started_at=STARTED)
+            self.poll_and_review(arena, worker, request['run_id'], 'finished')
+            self.assertIsNone(contest.duels.result(duel_id)['result'])
+            run_ids.append(request['run_id'])
+        first, second = arena.submitted
+        self.assertEqual(first['config'], second['config'])
+        self.assertEqual(first['bots'], second['bots'][::-1])
+        pending, = contest.rulings.pending()['pending']
+        self.assertEqual((pending['scope'], pending['duel_id']), ('duel', duel_id))
+        contest.rulings.record('duel', duel_id, TEAMS[0], '核定天梯对决胜方', operator='organizer')
+        result = contest.duels.result(duel_id)['result']
+        self.assertEqual((result['outcome'], result['winner'], result['runs']), ('win', TEAMS[0], run_ids))
+        self.assertEqual(result['games_won'], dict.fromkeys(TEAMS, 1))
+        self.assertEqual(result['games_lost'], dict.fromkeys(TEAMS, 1))
 
     @case('L0-017', '正式与天梯构建单败或双败均按整场局数结算')
     def test_build_failures_settle_the_whole_duel(self):
@@ -171,7 +221,7 @@ class MatchSettlementTests(MatchFixture):
         arena = ArenaStub()
         worker = ContestWorker(contest, self.root, arena)
         client = HttpClient(contest_handler(contest))
-        for stage, ladder in (('prelim', True), ('prelim', False), ('final', True)):
+        for stage, ladder in (('prelim', True), ('prelim', False)):
             for failed in ((0,), (1,), (0, 1)):
                 with self.subTest(stage=stage, ladder=ladder, failed=failed):
                     duel_id = f'duel-build-{stage}-{int(ladder)}-' + ''.join(map(str, failed))
@@ -292,12 +342,9 @@ class MatchSettlementTests(MatchFixture):
             finish_after_build_failure(duel_id)
         contest.runs.retry(deferred_run)
         finish_after_build_failure('duel-deferred')
-        plan_duel(contest, 'duel-other-stage', 'final-ladder')
-        finish_after_build_failure('duel-other-stage')
         self.assertFalse(worker.submit_next())
         client = HttpClient(contest_handler(contest))
         expected = (
-            ('duel-other-stage', []),
             ('duel-deferred', ['duel-again']),
             ('duel-again', ['duel-both']),
             ('duel-both', ['duel-left', 'duel-right']),

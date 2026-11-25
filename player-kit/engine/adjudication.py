@@ -2,6 +2,8 @@
 from .rules import PARAMS
 
 
+REQUEST_STATES = ('ok', 'timeout', 'connection', 'invalid', 'crash')
+STARTUP_STATES = ('ready', 'startup', 'crash')
 TURN_ERRORS = ('timeout', 'connection', 'invalid')
 TIME_LIMIT_STATES = ('timeout', 'connection')
 
@@ -12,7 +14,7 @@ def _forfeit(game, failures):
         loser = losers[0]
         game.forfeit(loser, failures[loser])
     elif losers:
-        game.forfeit(-1, 'crash' if 'crash' in failures else failures[0])
+        game.forfeit(-1, 'double_loss')
 
 
 def apply_startup(game, errors, startup, initial, exits):
@@ -27,6 +29,7 @@ def apply_startup(game, errors, startup, initial, exits):
             errors[seat] += 1
         failures.append(failure)
     _forfeit(game, failures)
+    return failures
 
 
 def apply_turn(game, errors, statuses, us, exits):

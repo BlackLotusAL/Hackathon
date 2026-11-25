@@ -86,13 +86,11 @@ final class Board {
         final TurnState turn;
         final char[] owner;
         final char[] contour;
-        final char[] latent;
 
         View(TurnState turn) {
             this.turn = turn;
             owner = String.join("", turn.owner()).toCharArray();
             contour = String.join("", turn.contour()).toCharArray();
-            latent = String.join("", turn.latent()).toCharArray();
         }
 
         boolean edge(int k) {
@@ -137,27 +135,23 @@ final class Board {
             return Arrays.copyOf(queue, length);
         }
 
-        int disconnectedValue(int[] captured) {
-            boolean[] blocked = new boolean[count], seen = new boolean[count];
-            for (int k : captured) blocked[k] = true;
-            var core = init.calib().get(1 - init.seat());
-            int start = cell(core.x(), core.y());
-            int[] queue = new int[count];
-            queue[0] = start;
-            seen[start] = true;
-            for (int head = 0, tail = 1; head < tail; head++) {
-                for (int next : neighbors[queue[head]]) {
-                    if (next >= 0 && owner[next] == enemy && !blocked[next] && !seen[next]) {
-                        seen[next] = true;
-                        queue[tail++] = next;
+        int scoreGain(int[] captured) {
+            char[] projected = owner.clone();
+            for (int k : captured) projected[k] = own;
+            int[] face = new int[2], edges = new int[2];
+            for (int k = 0; k < count; k++) {
+                if (projected[k] == '.') continue;
+                int seat = projected[k] - '0';
+                face[seat] += value(k);
+                if (!protectedCells[k]) {
+                    for (int n : neighbors[k]) {
+                        if (n < 0 || projected[n] != projected[k]) edges[seat]++;
                     }
                 }
             }
-            int result = 0;
-            for (int k = 0; k < count; k++) {
-                if (owner[k] == enemy && latent[k] == '.' && !blocked[k] && !seen[k]) result += value(k);
-            }
-            return result;
+            int seat = init.seat(), other = 1 - seat;
+            return (face[seat] - edges[seat] / 3 - turn.score().get(seat))
+                 - (face[other] - edges[other] / 3 - turn.score().get(other));
         }
     }
 }

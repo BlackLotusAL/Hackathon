@@ -5,13 +5,13 @@ import secrets
 from typing import NamedTuple, Optional
 from uuid import uuid4
 
-from engine.core import TIEBREAK_METRICS, compare_metrics
+from engine.rules import PARAMS, RULESET, TIEBREAK_METRICS, compare_metrics
 from engine.mapgen import load_map
 from engine.protocol import RUN_ID, json_object
 
 from .domain import (
-    BASELINES, DUEL_ID, DUEL_RULING_LABEL, DUEL_TIE_ISSUE, LOAD_TEST_ID, MANUAL_DUEL_KINDS,
-    OFFICIAL_BATCH, PORTAL_DUEL_RULES, TEAM_ID, ZONE, ContestError, encode,
+    ACTIVE_DUELS, BASELINES, DUEL_ID, DUEL_KINDS, DUEL_RULING_LABEL, DUEL_TIE_ISSUE,
+    LADDER_PHASE, LOAD_TEST_ID, MANUAL_KIND, OFFICIAL_BATCH, TEAM_ID, ZONE, ContestError, encode,
     require_phase, require_phase_available,
 )
 from .workbook import fits_text_cell
@@ -29,7 +29,7 @@ def load_pools(path):
     pools = json_object(path.read_bytes()) if path else {}
     result = {}
     for stage, entries in pools.items():
-        if stage not in ('prelim', 'final'):
+        if stage != RULESET:
             raise ValueError('地图池配置包含未知赛段')
         if not isinstance(entries, list) or len(entries) != FORMAL_MAPS:
             raise ValueError('每个正式地图池必须包含三张地图')
@@ -46,8 +46,8 @@ def load_pools(path):
     return result
 
 
-def formal_maps(pools, stage):
-    maps = pools.get(stage)
+def formal_maps(pools):
+    maps = pools.get(RULESET)
     if not maps:
         raise ContestError(503, 'MAP_POOL_UNAVAILABLE', '尚未配置该赛段的正式地图池')
     return maps
@@ -102,8 +102,10 @@ def _validate_duel_id(duel_id):
 def require_duel(connection, duel_id, *, public=False, manual=False):
     _validate_duel_id(duel_id)
     duel = connection.execute('SELECT * FROM duels WHERE duel_id = ?', (duel_id,)).fetchone()
+    if duel is not None and duel['kind'] not in DUEL_KINDS:
+        duel = None
     if duel is not None:
-        is_manual = duel['kind'] in MANUAL_DUEL_KINDS.values()
+        is_manual = duel['kind'] == MANUAL_KIND
         if public and (is_manual or duel['batch_id'] not in (None, OFFICIAL_BATCH)):
             duel = None
         elif manual and not is_manual:
@@ -132,13 +134,16 @@ class EffectiveGame(NamedTuple):
     def winner(self):
         if self.ruling is not None:
             return self.ruling['winner']
-        return self.teams[self.manifest['result']['winner']]
+        seat = self.manifest['result']['winner']
+        return None if seat is None else self.teams[seat]
 
     def summary(self):
         result = {'ordinal': self.ordinal, 'run_id': self.run_id, 'winner': self.winner,
                   'score': dict(zip(self.teams, self.manifest['result']['score']))}
         if self.ruling is not None:
             result['reason'] = self.ruling['reason']
+        elif self.manifest['result'].get('reason') == 'double_loss':
+            result['reason'] = 'double_loss'
         return result
 
 
@@ -180,30 +185,27 @@ def _manual_summary(row):
 
 
 class DuelService:
-    def __init__(self, database, maps, phase):
-        self.database, self.maps, self.phase = database, maps, phase
+    def __init__(self, database, phase):
+        self.database, self.phase = database, phase
 
     def accept(self, body):
-        sides = _sides(body, allow_baseline=self.phase != 'final')
+        sides = _sides(body)
         with self.database.transaction() as connection:
-            require_phase(connection, self.phase, *PORTAL_DUEL_RULES)
-            return self._schedule(connection, self.phase, PORTAL_DUEL_RULES[self.phase], sides, 'duel')
+            require_phase(connection, self.phase, LADDER_PHASE)
+            return self._schedule_ladder(connection, LADDER_PHASE, sides, 'duel')
 
     def accept_manual(self, body):
-        rules = body.get('rules')
-        if body.keys() != {'sides', 'rules'} or not isinstance(rules, str) or rules not in MANUAL_DUEL_KINDS:
-            raise ContestError(400, 'INVALID_DUEL', '请选择初赛或决赛规则，并填写双方队伍编号')
+        if not isinstance(body, dict) or body.keys() != {'sides', 'rules'} or body['rules'] != RULESET:
+            raise ContestError(400, 'INVALID_DUEL', '请填写双方队伍编号及当前规则（prelim）')
         sides = _sides({'sides': body['sides']}, allow_baseline=False, allow_same=True)
-        kind = MANUAL_DUEL_KINDS[rules]
         with self.database.transaction() as connection:
-            require_phase_available(connection, kind)
-            return self._schedule(connection, kind, rules, sides, 'duel-manual')
+            require_phase_available(connection, MANUAL_KIND)
+            return self._schedule_ladder(connection, MANUAL_KIND, sides, 'duel-manual')
 
-    def _schedule(self, connection, kind, rules, sides, prefix):
-        maps = ([{'seed': secrets.randbelow(999999) + 1}] if kind.endswith('-ladder')
-                else formal_maps(self.maps, rules))
+    def _schedule_ladder(self, connection, kind, sides, prefix):
         duel_id = f'{prefix}-{uuid4().hex}'
-        plan = {'duel_id': duel_id, 'rules': rules, 'sides': sides}
+        plan = {'duel_id': duel_id, 'rules': RULESET, 'sides': sides}
+        maps = [{'seed': secrets.randbelow(999999) + 1}]
         first_bots = sides[::-1] if secrets.randbelow(2) else sides
         insert_plan(connection, kind, plan, maps, first_bots=first_bots)
         return {'duel_id': duel_id}
@@ -212,8 +214,8 @@ class DuelService:
         with self.database.transaction(write=False) as connection:
             rows = connection.execute('''
                 SELECT duel_id, submission, accepted_at FROM duels
-                WHERE kind IN (?, ?) ORDER BY id DESC
-            ''', tuple(MANUAL_DUEL_KINDS.values()))
+                WHERE kind = ? ORDER BY id DESC
+            ''', (MANUAL_KIND,))
             return {'duels': [_manual_summary(row) for row in rows]}
 
     def stop_manual(self, duel_id):
@@ -234,13 +236,12 @@ class DuelService:
             cutoff = when.astimezone(ZONE).isoformat(timespec='microseconds')
         except (ValueError, OverflowError) as error:
             raise ValueError('--since 须为包含时区的 ISO 8601 时间') from error
-        placeholders = ', '.join('?' for _ in PORTAL_DUEL_RULES)
         with self.database.transaction(write=False) as connection:
-            rows = connection.execute(f"""
+            rows = connection.execute("""
                 SELECT duel_id, submission, accepted_at FROM duels
-                WHERE kind IN ({placeholders}) AND batch_id IS NULL AND accepted_at >= ?
+                WHERE kind = ? AND batch_id IS NULL AND accepted_at >= ?
                 ORDER BY accepted_at, id
-            """, (*PORTAL_DUEL_RULES, cutoff))
+            """, (LADDER_PHASE, cutoff))
             return {'duels': [
                 {'duel_id': row['duel_id'], 'accepted_at': row['accepted_at'], 'sides': sides}
                 for row in rows if json.loads(row['submission'])['sides'] == sides
@@ -258,10 +259,7 @@ class DuelService:
             if duel['result'] is None:
                 return {'duel_id': duel_id, 'side_results': dict.fromkeys(sides, 'pending'), 'result': None}
             result = json.loads(duel['result'])
-            if result['outcome'] == 'draw':
-                side_results = dict.fromkeys(sides, 'draw')
-            else:
-                side_results = {side: 'win' if side == result['winner'] else 'loss' for side in sides}
+            side_results = {side: 'win' if side == result['winner'] else 'loss' for side in sides}
             result['games'] = _game_results(connection, duel['id'], result['runs'])
             if duel['kind'].endswith('-ladder'):
                 result['previous_duel_ids'] = _previous_duel_ids(connection, duel, sides)
@@ -301,9 +299,9 @@ class DuelService:
             records = connection.execute('''
                 SELECT d.duel_id, g.ordinal, g.bots, r.run_id, r.review
                 FROM duels d JOIN games g ON g.duel = d.id JOIN current_runs r ON r.game = g.id
-                WHERE d.batch_id = ? AND r.review IN (?, ?)
+                WHERE d.batch_id = ? AND d.kind = ? AND r.review IN (?, ?)
                 ORDER BY d.id DESC, g.ordinal LIMIT ? OFFSET ?
-            ''', (batch_id, *REPLAY_REVIEWS, size + 1, page * size)).fetchall()
+            ''', (batch_id, RULESET, *REPLAY_REVIEWS, size + 1, page * size)).fetchall()
         return {'runs': [dict(dict(row), bots=json.loads(row['bots'])) for row in records[:size]],
                 'has_next': len(records) > size}
 
@@ -314,8 +312,8 @@ class DuelService:
             attempt = connection.execute('''
                 SELECT r.review FROM current_runs r JOIN games g ON g.id = r.game
                 JOIN duels d ON d.id = g.duel
-                WHERE r.run_id = ? AND (d.batch_id IS NOT NULL OR d.kind IN (?, ?))
-            ''', (run_id, *MANUAL_DUEL_KINDS.values())).fetchone()
+                WHERE r.run_id = ? AND ((d.batch_id IS NOT NULL AND d.kind = ?) OR d.kind = ?)
+            ''', (run_id, RULESET, MANUAL_KIND)).fetchone()
         if attempt is None or attempt['review'] not in REPLAY_REVIEWS:
             raise ContestError(404, 'REPLAY_NOT_FOUND', '该局暂无可播放的回放')
 
@@ -346,27 +344,29 @@ def settle(sides, ladder, games, *, build_failure=None, ruling=None):
     lost = won.copy()
     totals = {key: [0, 0] for key in TIEBREAK_METRICS}
     for game in games:
-        winner = game.manifest['result']['winner'] if by_seat else game.winner
+        record = game.manifest['result']
+        winner = record['winner'] if by_seat and game.ruling is None else game.winner
+        double_loss = record.get('reason') == 'double_loss'
+        completed = record.get('turns') == PARAMS['max_turns']
         for seat, competitor in enumerate(competitors if by_seat else game.teams):
             if competitor == winner:
                 won[competitor] += 1
-            elif winner is not None:
+            elif winner is not None or double_loss:
                 lost[competitor] += 1
             side = competitors.index(competitor)
-            for key in totals:
-                totals[key][side] += game.manifest['result'][key][seat]
+            if completed:
+                for key in totals:
+                    totals[key][side] += record[key][seat]
 
     result = {'games_won': won, 'games_lost': lost, 'runs': run_ids}
     a, b = competitors
     if won[a] != won[b]:
         return dict(result, outcome='win', winner=a if won[a] > won[b] else b)
-    if ladder:
-        return dict(result, outcome='draw', winner=None)
+    if lost[a] == lost[b] == scheduled:
+        return dict(result, outcome='double_loss', winner=None)
     winner, metric = compare_metrics(totals)
     if winner is not None:
         return dict(result, outcome='win', winner=competitors[winner], tiebreak=metric)
-    if by_seat:
-        return dict(result, outcome='draw', winner=None)
     if ruling is not None:
         return dict(result, outcome='win', winner=ruling['winner'], reason=ruling['reason'])
 
@@ -394,18 +394,17 @@ def settle_duel(connection, duel_id, *, ruling=None):
                 build_failure = row['run_id'], json.loads(row['manifest'])
             prior_effective = False
 
-    sides = json.loads(duel['submission'])['sides']
-    result = settle(sides, ladder, effective, build_failure=build_failure, ruling=ruling)
+    submission = json.loads(duel['submission'])
+    result = settle(submission['sides'], ladder, effective, build_failure=build_failure, ruling=ruling)
     if result is None:
-        if len(effective) == FORMAL_GAMES:
+        if len(effective) == (LADDER_GAMES if ladder else FORMAL_GAMES):
             connection.execute('UPDATE duels SET awaiting_ruling = 1 WHERE id = ?', (duel_id,))
         return
     if ladder:
         row = connection.execute('''
-            SELECT result FROM duels WHERE kind LIKE '%-ladder' AND result IS NOT NULL
-            AND (kind = ?) = ?
+            SELECT result FROM duels WHERE kind = ? AND result IS NOT NULL
             ORDER BY confirmed_order DESC LIMIT 1
-        ''', (MANUAL_DUEL_KINDS['prelim'], duel['kind'] == MANUAL_DUEL_KINDS['prelim'])).fetchone()
+        ''', (duel['kind'],)).fetchone()
         ended = datetime.now(ZONE)
         if row is not None:
             latest = datetime.fromisoformat(json.loads(row['result'])['ended_at'])
@@ -417,10 +416,10 @@ def settle_duel(connection, duel_id, *, ruling=None):
 def _require_run(connection, run_id):
     if not isinstance(run_id, str) or not RUN_ID.fullmatch(run_id):
         raise ContestError(400, 'INVALID_RUN_ID', '执行编号无效')
-    run = connection.execute('''
+    run = connection.execute(f'''
         SELECT r.review, r.ruling, g.duel, g.bots, d.closed_at, c.run_id AS current_run
         FROM runs r JOIN games g ON g.id = r.game JOIN duels d ON d.id = g.duel
-        JOIN current_runs c ON c.game = g.id WHERE r.run_id = ?
+        JOIN current_runs c ON c.game = g.id WHERE r.run_id = ? AND {ACTIVE_DUELS}
     ''', (run_id,)).fetchone()
     if run is None:
         raise ContestError(404, 'RUN_NOT_FOUND', '执行不存在')
@@ -454,14 +453,14 @@ class Rulings:
 
     def pending(self):
         with self.database.transaction(write=False) as connection:
-            rows = connection.execute('''
+            rows = connection.execute(f'''
                 SELECT d.id AS position, 0 AS ordinal, d.duel_id, d.kind, d.batch_id, d.submission,
                        NULL AS run_id, ? AS issue
-                FROM duels d WHERE d.closed_at IS NULL AND d.awaiting_ruling = 1
+                FROM duels d WHERE d.closed_at IS NULL AND {ACTIVE_DUELS} AND d.awaiting_ruling = 1
                 UNION ALL
                 SELECT d.id, g.ordinal, d.duel_id, d.kind, d.batch_id, d.submission, r.run_id, r.issue
                 FROM duels d JOIN games g ON g.duel = d.id JOIN current_runs r ON r.game = g.id
-                WHERE d.closed_at IS NULL AND r.review = 'awaiting_ruling'
+                WHERE d.closed_at IS NULL AND {ACTIVE_DUELS} AND r.review = 'awaiting_ruling'
                 ORDER BY position, ordinal
             ''', (DUEL_TIE_ISSUE,))
             return {'pending': [
@@ -473,7 +472,7 @@ class Rulings:
             ]}
 
     def record(self, scope, target, winner, reason, *, operator):
-        if scope not in ('game', 'duel') or not isinstance(winner, str):
+        if scope not in ('game', 'duel') or type(winner) not in (str, int):
             raise ContestError(400, 'INVALID_RULING', '请选择裁定范围、胜方并填写理由')
         reason = _reason(reason)
         if not fits_text_cell(DUEL_RULING_LABEL.format(reason) if scope == 'duel' else reason):
@@ -487,7 +486,9 @@ class Rulings:
                 item = require_duel(connection, target)
                 sides = json.loads(item['submission'])['sides']
                 pending = item['awaiting_ruling']
-            if winner not in sides:
+            if sides[0] == sides[1] and str(winner) in ('0', '1'):
+                winner = int(winner)
+            elif sides[0] == sides[1] or winner not in sides:
                 raise ContestError(400, 'INVALID_RULING_WINNER', '裁定胜方必须是本场的参赛方')
             existing = _existing_ruling(item, scope=scope, winner=winner, reason=reason)
             if existing is not None:

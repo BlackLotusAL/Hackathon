@@ -20,14 +20,20 @@ public:
         static constexpr int dy[] = {-1, 0, 1, 0};
         static constexpr int offsets[] = {0, 1, 3};  // Straight, right, left.
         const auto forward = directions.find(me.dir);
-        const char own = static_cast<char>('0' + init_.seat);
 
         for (int offset : offsets) {
             const auto direction = (forward + offset) % directions.size();
-            const int x = me.x + dx[direction];
-            const int y = me.y + dy[direction];
-            if (x >= 0 && x < init_.size && y >= 0 && y < init_.size &&
-                init_.terrain[y][x] != '#' && state.contour[y][x] != own) {
+            bool safe = true;
+            const int steps = init_.move_steps(state.turn, me.x, me.y);
+            for (int i = 1; i <= steps; ++i) {
+                const int x = me.x + i * dx[direction], y = me.y + i * dy[direction];
+                if (x < 0 || x >= init_.size || y < 0 || y >= init_.size ||
+                    init_.terrain[y][x] == '#' || state.contour[y][x] == '0' + init_.seat) {
+                    safe = false;
+                    break;
+                }
+            }
+            if (safe) {
                 return std::string(1, directions[direction]);
             }
         }

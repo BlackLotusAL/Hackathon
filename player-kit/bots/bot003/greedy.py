@@ -5,7 +5,7 @@
 import os
 import time
 
-from engine.rules import DIRS, DX, DY, OPP, PARAMS
+from engine.rules import DIRS, DX, DY, OPP
 NO_BUDGET = bool(os.environ.get('ARENA_NO_BUDGET'))   # 设为 1 时不限时：结果与机器快慢无关，便于复现
 from lib import INF, bfs, path_to, enemy_reach, loop_candidates, closure_gain
 
@@ -21,14 +21,28 @@ class GreedyBot(object):
         self.plan = []
 
     # ---------------------------------------------------------------- 工具
-    def ok_step(self, g, me, s, d):
+    def ok_step(self, st, d):
+        g, me = st.game, st.me
         if d == OPP[me.dir]:
             return False
-        x, y = me.x + DX[d], me.y + DY[d]
-        if not g.inb(x, y):
-            return False
-        k = g.idx(x, y)
-        return g.terrain[k] != '#' and g.trail[k] != s
+        for i in range(1, st.move_steps(me) + 1):
+            x, y = me.x + i * DX[d], me.y + i * DY[d]
+            if not g.inb(x, y) or g.terrain[g.idx(x, y)] == '#' or g.trail[g.idx(x, y)] == st.seat:
+                return False
+        return True
+
+    def safe_direction(self, st, preferred):
+        if preferred and self.ok_step(st, preferred):
+            return preferred
+        return next((d for d in DIRS if self.ok_step(st, d)), st.me.dir)
+
+    def advance_plan(self, st, d):
+        steps = st.move_steps(st.me)
+        if self.plan[:steps] == [d] * steps:
+            del self.plan[:steps]
+        else:
+            self.plan.clear()  # 亮区内不能在两步之间转弯
+        return d
 
     def facts(self, st):
         """每回合都要用的量：回家距离、对手威胁（到我轮廓的最少回合数）。"""
@@ -46,7 +60,7 @@ class GreedyBot(object):
                 if g.owner[k] == s and 0 < dist[k] < d_home:
                     d_home, home_dir = dist[k], first[k]
         f['d_home'], f['home_dir'] = d_home, home_dir
-        es = 2 if en.alive and en.boost_left > 0 else 1     # 对手加速时按每回合 2 格估计
+        es = st.move_steps(en) if en.alive else 1
         f['es'] = es
         reach = enemy_reach(g, en, es)
         f['reach'] = reach
@@ -58,14 +72,11 @@ class GreedyBot(object):
         return f
 
     def value_of(self, st, got, steal, length):
-        g = st.game
-        v = sum(g.val(k) for k in got) + steal
-        o = g.order
-        if o and g.turn + length + 1 <= o['until']:
-            r = o['rect']
-            N = g.N
-            v += sum(g.val(k) for k in got if r[0] <= k % N <= r[2] and r[1] <= k // N <= r[3])
-        return v
+        projected = st.game.copy()
+        side = st.seat
+        for k in got:
+            projected.owner[k] = side
+        return (projected.score(side) - projected.score(1 - side)) - (st.score[side] - st.score[1 - side])
 
     def plan_value(self, st, f, moves, trail):
         g, s = st.game, st.seat
@@ -175,34 +186,6 @@ class GreedyBot(object):
             return bd
         return None
 
-    def boost(self, st, f, d):
-        g, s, me = st.game, st.seat, st.me
-        if me.boost_left <= 0 or len(self.plan) < 2 or not (self.plan[0] == self.plan[1] == d):
-            return False
-        x1, y1 = me.x + DX[d], me.y + DY[d]
-        x2, y2 = x1 + DX[d], y1 + DY[d]
-        if not g.inb(x2, y2):
-            return False
-        k1, k2 = g.idx(x1, y1), g.idx(x2, y2)
-        return g.terrain[k1] != '#' and g.terrain[k2] != '#' and g.trail[k1] != s and g.trail[k2] != s
-
-    # ---------------------------------------------------------------- 决策
-    item_range = 12
-
-    def item(self, st, f):
-        """道具已出现、在 item_range 步内、我比对手先到，就去拿。"""
-        g = st.game
-        b = getattr(g, 'boost', None)
-        if not b:
-            return None
-        if not (f['home'] or f['d_home'] + 1 < f['threat']):
-            return None
-        dist, first = f['mine']
-        k = g.idx(b['x'], b['y'])
-        if 0 < dist[k] <= self.item_range and dist[k] < f['reach'][k]:
-            return first[k]
-        return None
-
     def act(self, st):
         self.t0 = time.time()
         g, s, me = st.game, st.seat, st.me
@@ -212,27 +195,23 @@ class GreedyBot(object):
         f = self.facts(st)
         if not f['home'] and f['threat'] <= f['d_home'] + self.margin and f['home_dir']:
             self.plan = []
-            return f['home_dir']
-        a = self.attack(st, f) or self.item(st, f)
-        if a and self.ok_step(g, me, s, a):
+            return self.safe_direction(st, f['home_dir'])
+        a = self.attack(st, f)
+        if a and self.ok_step(st, a):
             self.plan = []
             return a
         if not self.plan:
             if not f['home']:
-                return f['home_dir'] or me.dir
+                return self.safe_direction(st, f['home_dir'])
             self.plan = self.make_plan(st, f)
         d = self.plan[0]
-        if not self.ok_step(g, me, s, d):
+        if not self.ok_step(st, d):
             self.plan = []
             if not f['home'] and f['home_dir']:
-                return f['home_dir']
+                return self.safe_direction(st, f['home_dir'])
             for d2 in DIRS:
-                if self.ok_step(g, me, s, d2):
+                if self.ok_step(st, d2):
                     return d2
             return me.dir
-        if self.boost(st, f, d):
-            del self.plan[:2]
-            return d + '+'
-        self.plan.pop(0)
-        return d
+        return self.advance_plan(st, d)
 

@@ -18,7 +18,7 @@ from engine.verification import VerificationError
 from .arena import RUN_QUERY_BATCH_SIZE, ArenaClient, ExecutionService, review_archive
 from .config import IPWhitelist
 from .database import Database, DatabaseStopping
-from .domain import BATTLE_RULES, OFFICIAL_BATCH, ContestError
+from .domain import OFFICIAL_BATCH, PHASES, RULESET, ContestError
 from .duels import DuelService, Rulings, load_pools
 from .preliminary import Preliminary
 from .self_check import check_bot
@@ -38,9 +38,11 @@ class Contest:
     """One shared database, with explicit feature services for every caller."""
 
     def __init__(self, path, pools=None, *, phase='prelim-ladder', shutdown=None):
+        if phase not in PHASES:
+            raise ValueError('配置 phase 须为 ' + '、'.join(PHASES))
         self.database = Database(path, shutdown=shutdown)
         self.maps = pools or {}
-        self.duels = DuelService(self.database, self.maps, phase)
+        self.duels = DuelService(self.database, phase)
         self.runs = ExecutionService(self.database)
         self.preliminary = Preliminary(self.database, self.maps, phase)
         self.rulings = Rulings(self.database)
@@ -245,7 +247,7 @@ class Admin:
             body = http.read_json('INVALID_DUEL', '请选择规则并填写双方队伍编号')
             return http.reply(202, self.duels.accept_manual(body))
         if path == '/admin/check':
-            body = http.read_json('INVALID_CHECK', '请选择规则并填写 Bot 地址')
+            body = http.read_json('INVALID_CHECK', '请填写 Bot 地址和当前规则（prelim）')
             return http.reply(200, check_bot(body))
         manual_duel = MANUAL_DUEL_RESOURCE.fullmatch(path)
         if manual_duel and manual_duel[2] == 'stop':
@@ -267,8 +269,8 @@ class Admin:
                 data = http.read_json('INVALID_TEAM_SELECTION', '请配置压测队伍')
                 if 'rules' in data:
                     rules = data.pop('rules')
-                    if rules not in BATTLE_RULES:
-                        raise ContestError(400, 'INVALID_RULES', '请选择初赛或决赛规则')
+                    if rules != RULESET:
+                        raise ContestError(400, 'INVALID_RULES', '批量对战须使用当前赛题规则（prelim）')
             else:
                 data = http.read_body(MAX_UPLOAD, 'INVALID_ROSTER', '请选择 XLSX 压测名单')
             return http.reply(200, self.preliminary.start_load_test(batch_id, data, rules=rules))

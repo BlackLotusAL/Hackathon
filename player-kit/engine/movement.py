@@ -1,26 +1,21 @@
 """Resolve simultaneous beam movement, collisions, and restarts."""
-from .rules import DX, DY, OPP, PARAMS
+from .rules import DIRS, DX, DY, OPP, PARAMS
+from . import prelim
 
 
 def move_beams(game, cmds, ev):
     cut = [False, False]
     mv = [0, 0]
+    station = prelim.active_station(game.boost_points, game.turn)
     # 第 1 步 确定方向，以及走 1 格还是 2 格
     for s in (0, 1):
         b = game.beams[s]
         if not b.alive:
             continue
-        c = cmds[s] if isinstance(cmds[s], str) else ''
-        d = c[:1]
-        plus = c[1:] == '+'
-        if len(c) > 2 or d not in DX or (len(c) == 2 and not plus) or d == OPP[b.dir]:
-            d, plus = b.dir, False                     # 无效命令、掉头命令
-        if b.boost_left <= 0:
-            plus = False                               # 没有加速状态：+ 被忽略
-        b.dir = d
-        b.speed = 2 if plus else 1
-        mv[s] = b.speed
-    # 第 2～6 步 移动步（加速并下达 + 的束斑做两次）
+        command = cmds[s]
+        if command in DIRS and command != OPP[b.dir]:
+            b.dir = command
+        b.speed = mv[s] = prelim.step_count(station, b.x, b.y)
     for sub in (1, 2):
         movers = [s for s in (0, 1) if game.beams[s].alive and not cut[s] and mv[s] >= sub]
         if movers:
@@ -35,7 +30,6 @@ def move_beams(game, cmds, ev):
                 game.trail[k] = -1
         b = game.beams[s]
         b.alive, b.respawn, b.speed = False, PARAMS['restart'], 1
-        b.boost_left = 0
         ev.append({'t': 'down', 's': s})
     for s in (0, 1):
         b = game.beams[s]
@@ -57,7 +51,6 @@ def move_beams(game, cmds, ev):
                 game.trail[k] = -1
         b = game.beams[s]
         b.alive, b.respawn, b.speed = False, PARAMS['restart'], 1
-        b.boost_left = 0
         ev.append({'t': 'down', 's': s})
     for s in (0, 1):                                    # 补标轮廓
         b = game.beams[s]
@@ -109,50 +102,4 @@ def _move_one_step(game, movers, cut, ev):
         elif tr == 1 - s:
             cut[1 - s] = True
             ev.append({'t': 'cut', 's': s})
-    # 第 6 步 闭合与延伸
-    closers = []
-    for s in (0, 1):
-        if not moving[s] or cut[s]:
-            continue
-        k = game.idx(game.beams[s].x, game.beams[s].y)
-        if game.owner[k] == s and s in game.trail:
-            closers.append(s)
-    fills, claim = {}, {}
-    for s in closers:   # 双方都按闭合前的局面计算
-        fills[s] = game.fill_cells(s)
-        for c in fills[s]:
-            claim[c] = claim.get(c, 0) | (1 << s)
-    both = len(closers) == 2
-    for s in closers:
-        value = 0
-        for c in fills[s]:
-            if game.trail[c] == s:
-                game.trail[c] = -1
-            if game.base[c] >= 0 or game.owner[c] == s:
-                continue
-            if both and claim[c] == 3:
-                continue          # 被双方同时围到：保持原归属
-            if not both and game.trail[c] == 1 - s:
-                cut[1 - s] = True
-                ev.append({'t': 'enclose', 's': s})
-            game.owner[c] = s
-            value += game.val(c)
-        for q in range(len(game.trail)):
-            if game.trail[q] == s:
-                game.trail[q] = -1
-        ev.append({'t': 'close', 's': s, 'gain': value})
-    for s in (0, 1):
-        if not moving[s] or cut[s]:
-            continue
-        k = game.idx(game.beams[s].x, game.beams[s].y)
-        if game.owner[k] != s:
-            game.trail[k] = s
-    if game.boost:                                     # 拾取道具（闭合结算之后）
-        for s in (0, 1):
-            b = game.beams[s]
-            if moving[s] and not cut[s] and b.x == game.boost['x'] and b.y == game.boost['y']:
-                b.boost_left = PARAMS['boost_duration']
-                game.picked[s] = True
-                ev.append({'t': 'pickup', 's': s, 'x': b.x, 'y': b.y})
-                game.boost = None
-                break
+    prelim.extend_and_close(game, moving, cut, ev)

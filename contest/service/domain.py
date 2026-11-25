@@ -3,6 +3,8 @@ from datetime import timedelta, timezone
 import json
 import re
 
+from engine.rules import RULESET
+
 
 DUEL_ID = re.compile(r'duel-[A-Za-z0-9_-]+')
 ZONE = timezone(timedelta(hours=8))
@@ -11,14 +13,15 @@ TEAM_ID = re.compile(r'team[0-9]{3}')
 BASELINES = ('bot001', 'bot002', 'bot003')
 OFFICIAL_BATCH = 'official'
 LOAD_TEST_ID = re.compile(r'load-[A-Za-z0-9_-]{1,40}')
-GAME_TIE_ISSUE = '单局四项指标全同，待主办方裁定'
-DUEL_TIE_ISSUE = '整场四项累计指标全同，待主办方裁定'
+GAME_TIE_ISSUE = '单局决胜指标全同，待主办方裁定'
+DUEL_TIE_ISSUE = '整场无可比较的单局或累计指标全同，待主办方裁定'
 DUEL_RULING_LABEL = '人工裁定（{}）'
 
-PORTAL_DUEL_RULES = {'prelim-ladder': 'prelim', 'final-ladder': 'final', 'final': 'final'}
-MANUAL_DUEL_KINDS = {'prelim': 'manual-prelim-ladder', 'final': 'manual-final'}
-BATTLE_RULES = ('prelim', 'final')
-PHASES = ('prelim-ladder', 'prelim', 'final-ladder', 'final')
+LADDER_PHASE = 'prelim-ladder'
+MANUAL_KIND = 'manual-prelim-ladder'
+PHASES = (LADDER_PHASE, RULESET)
+DUEL_KINDS = (*PHASES, MANUAL_KIND)
+ACTIVE_DUELS = f"d.kind IN ({', '.join(repr(kind) for kind in DUEL_KINDS)})"
 _LOAD_TEST_PREFIX = 'load-test-'
 DUEL_PHASE = f"""CASE
     WHEN d.batch_id IS NOT NULL AND d.batch_id != '{OFFICIAL_BATCH}' THEN '{_LOAD_TEST_PREFIX}' || d.kind
@@ -46,15 +49,15 @@ def require_phase_available(connection, kind, *, load_test=False):
     requested = _LOAD_TEST_PREFIX + kind if load_test else kind
     previous = connection.execute(f'''
         SELECT {DUEL_PHASE} AS phase FROM duels d
-        WHERE d.closed_at IS NULL AND ({DUEL_PHASE}) != ?
+        WHERE d.closed_at IS NULL AND {ACTIVE_DUELS} AND ({DUEL_PHASE}) != ?
         ORDER BY d.id LIMIT 1
     ''', (requested,)).fetchone()
     if previous is not None:
         phase = previous['phase']
         if phase.startswith(_LOAD_TEST_PREFIX):
-            label = '初赛规则的批量对战' if phase == _LOAD_TEST_PREFIX + 'prelim' else '决赛规则的批量对战'
-        elif phase in MANUAL_DUEL_KINDS.values():
-            label = '另一赛段的单场模拟' if requested in MANUAL_DUEL_KINDS.values() else '单场模拟'
+            label = '批量对战'
+        elif phase == MANUAL_KIND:
+            label = '单场模拟'
         else:
             label = f'赛程 {phase}'
         raise ContestError(409, 'PHASE_BUSY', f'{label} 仍有未结束的对决')

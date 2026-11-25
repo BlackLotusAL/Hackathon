@@ -188,7 +188,9 @@ def http_bots(run_id):
             if self.path != f'/v1/matches/{run_id}/{action}':
                 return self.reply(400)
             if kind == 'init':
-                if message['seat'] != seat or self.server.stage is not None:
+                fields = {'type', 'seat', 'stage', 'map', 'size', 'max_turns', 'terrain', 'calib', 'boost_points'}
+                if (message.keys() != fields or message['seat'] != seat or message['stage'] != 'prelim'
+                        or self.server.stage is not None):
                     return self.reply(400)
                 self.server.stage = message['stage']
                 return self.reply(204)
@@ -197,8 +199,8 @@ def http_bots(run_id):
             if kind == 'end':
                 self.server.stage = None
                 return self.reply(204)
-            final = self.server.stage == 'final'
-            if any((field in message) != final for field in ('latent', 'latent_regions')):
+            fields = {'type', 'turn', 'owner', 'contour', 'beams', 'active_station', 'score', 'lead_turns', 'time_us'}
+            if message.keys() != fields:
                 return self.reply(400)
             command = ('R', 'U', 'L', 'D')[((message['turn'] - 1) // 4) % 4] if seat == 0 else 'D'
             self.reply(200, {'turn': message['turn'], 'cmd': command})
@@ -398,7 +400,7 @@ def arena_archive(output, bots, *, state='finished', duel_started_at=None):
     if state == 'finished':
         result = json_object((output / 'result.json').read_bytes())
         fields = ('run_id', 'version', 'map', 'map_sha256', 'winner', 'reason',
-                  'score', 'bonus', 'lead_turns', 'time_us')
+                  'score', 'turns', 'lead_turns', 'time_us')
         manifest['result'] = {key: result[key] for key in fields}
     if duel_started_at is not None:
         manifest['duel_started_at'] = duel_started_at

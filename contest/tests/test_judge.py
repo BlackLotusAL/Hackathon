@@ -1,9 +1,14 @@
 """Exercise judge tasks and the Contest archive review contract."""
 import json
 import shutil
+from unittest.mock import patch
 
 from engine import VERSION
 from engine.protocol import dumps, json_object
+from engine.referee import HttpBot
+from engine.replay import game_result
+from engine.verification import verify_replay
+from judge.task import ContainerBot, run_task
 from service.arena import review_archive
 from service.server import Contest, ContestWorker
 
@@ -12,44 +17,82 @@ from .helpers import (ArenaStub, Bot, MatchFixture, arena_archive, case, http_bo
 
 
 class JudgeTests(MatchFixture):
-    @case('L0-001', '初决赛双方 Bot 服务共用完整执行编号，归档可通过同版复核')
+    @case('L0-049', '回合连接中断后在时限内收到容器退出标记')
+    def test_exit_marker_after_connection_break(self):
+        marker = self.root / 'exited.json'
+        bot = ContainerBot('http://localhost:8080', marker)
+        clock = [0.0]
+
+        def publish_after_delay(seconds):
+            clock[0] += seconds
+            if clock[0] >= 0.09:
+                marker.write_text('{"exit_code":1,"oom":false}', encoding='utf-8')
+
+        transport = ('connection', 0, 'closed', 2000)
+        now = patch('judge.task.time.monotonic', side_effect=lambda: clock[0])
+        delay = patch('judge.task.time.sleep', side_effect=publish_after_delay)
+        with patch.object(HttpBot, 'request', return_value=transport), now, delay:
+            reply = bot.request('POST', '/v1/matches/run-1.1/turns/3', {'type': 'turn'}, 0.2)
+        self.assertEqual(reply, transport)
+        self.assertTrue(bot.exited())
+        self.assertLessEqual(clock[0], 0.2)
+
+    @case('L0-001', '双方 Bot 服务共用完整执行编号，归档可通过同版复核')
     def test_judge_entrypoint_produces_verifiable_archives(self):
-        for stage, run_id in (('prelim', 'run-1.1'), ('final', 'run-2.2')):
-            with self.subTest(stage=stage), http_bots(run_id) as specs:
-                request = self.request(stage, run_id)
-                request['config']['map'] = sealed_maps(stage)[0]
-                task = write_judge_task(self.root / ('task-' + stage), dict(request, bots=specs))
-                archive_root = self.root / 'entrypoint'
-                output = archive_root / 'runs' / run_id
-                completed = run_module('judge', '--task', task, '--out', output)
-                result = json_object((output / 'result.json').read_bytes())
-                self.assertEqual(json.loads(completed.stdout), result)
-                self.assertEqual((result['run_id'], result['version'], result['stage']), (run_id, VERSION, stage))
-                self.assertEqual((result['winner'], result['reason'], result['turns'], result['errors']),
-                                 (0, 'limit', 600, [0, 0]))
-                self.assertGreater(result['score'][0], result['score'][1])
-                replay = json_object((output / 'replay.json').read_bytes())
-                self.assertEqual(replay['version'], result['version'])
-                for document in (result, replay):
-                    self.assertFalse({'format', 'engine_version'} & document.keys())
-                self.assertEqual(len(replay['frames']), 600)
-                self.assertEqual(len(replay['observations']), 602)
-                self.assertEqual('latent' in replay['init'], stage == 'final')
-                self.assertEqual('latent' in replay['params'], stage == 'final')
-                sealed = request['config']['map']
-                map_file = self.root / f'{stage}.json'
-                map_file.write_bytes(sealed['file'].encode('utf-8'))
-                verified = run_module('engine', 'verify-replay', output / 'replay.json',
-                                      '--log-file', output / 'log.jsonl',
-                                      '--map-file', map_file, '--map-sha256', sealed['sha256'])
-                self.assertEqual(json.loads(verified.stdout), replay['result'])
-                expected = arena_archive(output, self.metadata(request))
-                manifest = review_archive(archive_root, request, 'finished', ladder=False)
-                self.assertEqual(manifest, expected)
+        stage, run_id = 'prelim', 'run-1.1'
+        with http_bots(run_id) as specs:
+            request = self.request(stage, run_id)
+            request['config']['map'] = sealed_maps(stage)[0]
+            task = write_judge_task(self.root / ('task-' + stage), dict(request, bots=specs))
+            archive_root = self.root / 'entrypoint'
+            output = archive_root / 'runs' / run_id
+            completed = run_module('judge', '--task', task, '--out', output)
+            result = json_object((output / 'result.json').read_bytes())
+            self.assertEqual(json.loads(completed.stdout), result)
+            self.assertEqual((result['run_id'], result['version'], result['stage']), (run_id, VERSION, stage))
+            self.assertEqual((result['winner'], result['reason'], result['turns'], result['errors']),
+                             (0, 'limit', 600, [0, 0]))
+            self.assertGreater(result['score'][0], result['score'][1])
+            replay = json_object((output / 'replay.json').read_bytes())
+            self.assertEqual(replay['version'], result['version'])
+            for document in (result, replay):
+                self.assertFalse({'format', 'engine_version'} & document.keys())
+            self.assertEqual(len(replay['frames']), 600)
+            self.assertEqual(len(replay['observations']), 602)
+            self.assertEqual(replay['params']['station_period'], 100)
+            self.assertEqual(set(replay['result']), {'turns', 'winner', 'reason', 'score', 'lead_turns', 'time_us'})
+            self.assertEqual(set(replay['init']), {'owner', 'contour', 'beams', 'active_station', 'score',
+                                                  'lead_turns', 'time_us'})
+            sealed = request['config']['map']
+            map_file = self.root / f'{stage}.json'
+            map_file.write_bytes(sealed['file'].encode('utf-8'))
+            verified = run_module('engine', 'verify-replay', output / 'replay.json',
+                                  '--log-file', output / 'log.jsonl',
+                                  '--map-file', map_file, '--map-sha256', sealed['sha256'])
+            self.assertEqual(json.loads(verified.stdout), replay['result'])
+            # Extra fields in an earlier archive with the same gameplay may be ignored.
+            compatible = json_object((output / 'replay.json').read_bytes())
+            compatible['map']['old_metadata'] = []
+            for snapshot in [compatible['init'], *compatible['frames']]:
+                for beam in snapshot['beams']:
+                    beam['old_metadata'] = 0
+            board = json_object(sealed['file'].encode('utf-8'))
+            self.assertEqual(game_result(verify_replay(compatible, board=board)), replay['result'])
+            expected = arena_archive(output, self.metadata(request))
+            manifest = review_archive(archive_root, request, 'finished', ladder=False)
+            self.assertEqual(manifest, expected)
+
+    @case('L0-050', '裁判不会按旧赛段规则启动新任务')
+    def test_judge_rejects_retired_stage_even_with_override(self):
+        task = write_judge_task(self.root / 'task', self.request('final'))
+        output = self.root / 'out'
+        with self.assertRaisesRegex(ValueError, '当前赛题规则'):
+            run_task(task, output, 'prelim')
+        self.assertFalse(output.exists())
 
     @case('L0-015', '正式赛和天梯归档缺失、篡改或版本不符时暂缓结算')
     def test_invalid_archives_remain_held_without_settlement(self):
-        for kind in ('prelim', 'final', 'prelim-ladder'):
+        for kind in ('prelim', 'prelim-ladder'):
             stage = kind.split('-')[0]
             ladder = kind.endswith('-ladder')
             request = self.request(stage)
