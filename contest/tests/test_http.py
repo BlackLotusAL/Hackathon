@@ -77,8 +77,11 @@ class HttpServiceTests(MatchFixture):
                 check = {'target': 'http://127.0.0.1:1', 'rules': 'final'}
                 self.assertEqual(admin.json('/admin/check', check, method='POST', status=400)['code'],
                                  'INVALID_RULES')
-                self.assertEqual(admin.post(path, {'sides': [TEAMS[0], 'bot001'], 'rules': 'prelim'})[0], 400)
+                self.assertEqual(admin.post(path, {'sides': [TEAMS[0], 'bot099'], 'rules': 'prelim'})[0], 400)
                 self.assertEqual(admin.request('/admin/replay.js')[0], 200)
+                status, page = admin.request('/admin')
+                self.assertEqual(status, 200)
+                self.assertNotIn(b'id="manual-stop"', page)
                 body = {'sides': [TEAMS[0], TEAMS[0]], 'rules': 'prelim'}
                 duel_id = admin.json(path, body, method='POST', status=202)['duel_id']
                 detail_path = f'{path}/{duel_id}'
@@ -120,9 +123,10 @@ class HttpServiceTests(MatchFixture):
                 self.assertEqual(admin.json('/admin/rulings')['pending'], [])
                 self.assertEqual([row['duel_id'] for row in admin.json(path)['duels']], [duel_id])
 
-                stopped_id = admin.json(path, body, method='POST', status=202)['duel_id']
-                admin.json(f'{path}/{stopped_id}/stop', method='POST')
-                self.assertEqual(admin.json(f'{path}/{stopped_id}')['state'], 'stopped')
+                active_id = admin.json(path, body, method='POST', status=202)['duel_id']
+                active_path = f'{path}/{active_id}'
+                self.assertEqual(admin.json(f'{active_path}/stop', method='POST', status=404)['code'], 'NOT_FOUND')
+                self.assertEqual(admin.json(active_path)['state'], 'in_progress')
                 self.assertEqual(admin.json('/admin/prelim/progress')['state'], 'empty')
                 found = Contest(database).duels.ladder_submissions(TEAMS, '1970-01-01T00:00:00+08:00')
                 self.assertEqual(found['duels'], [])

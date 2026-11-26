@@ -154,7 +154,7 @@
     .inline-form { display: grid; gap: 8px; }
 
     .duel-grid {
-      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) minmax(0, 1.05fr);
+      display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 1px; background: var(--ink); border: 1px solid var(--ink);
     }
     .duel-cell { min-width: 0; padding: 16px; background: var(--surface); }
@@ -198,7 +198,6 @@
     @media (max-width: 800px) {
       .top .wrap { gap: 12px; }
       .columns { grid-template-columns: minmax(0, 1fr); gap: 20px; }
-      .duel-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .replay-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
     }
     @media (max-width: 570px) {
@@ -262,10 +261,10 @@
       <form id="manual-form">
         <div class="duel-grid">
           <div class="duel-cell team-a">
-            <label class="field">队伍 1<input id="manual-team-a" class="mono" type="text" pattern="team[0-9]{3}" placeholder="team003" autocomplete="off" required></label>
+            <label class="field">队伍 1<input id="manual-team-a" class="mono" type="text" pattern="(team[0-9]{3}|bot00[123])" placeholder="team003" autocomplete="off" required></label>
           </div>
           <div class="duel-cell team-b">
-            <label class="field">队伍 2<input id="manual-team-b" class="mono" type="text" pattern="team[0-9]{3}" placeholder="team001" autocomplete="off" required></label>
+            <label class="field">队伍 2<input id="manual-team-b" class="mono" type="text" pattern="(team[0-9]{3}|bot00[123])" placeholder="team001" autocomplete="off" required></label>
           </div>
         </div>
         <div class="duel-submit">
@@ -279,10 +278,7 @@
       <div class="panel">
         <p id="manual-empty" class="muted">暂无对决</p>
         <div id="manual-details" class="form-stack" hidden>
-          <div class="history-controls">
-            <label class="field">查看对决<select id="manual-duel" class="mono"></select></label>
-            <button id="manual-stop" type="button" disabled>结束模拟</button>
-          </div>
+          <label class="field">查看对决<select id="manual-duel" class="mono"></select></label>
           <div class="result-line">
             <code id="manual-duel-id"></code><strong id="manual-result"></strong>
           </div>
@@ -498,7 +494,6 @@
   let officialState;
   let officialDraft = [];
   let batchState;
-  let manualRunning = false;
   let checking = false;
   let rankingRequested = false;
   let pendingRulings = [];
@@ -641,7 +636,6 @@ function renderAttention(attention, path) {
     node('confirm').disabled = changing || selectedBatch !== 'official' || batchState !== 'awaiting_confirmation';
     node('withdraw').disabled = changing;
     node('manual-start').disabled = changing;
-    node('manual-stop').disabled = changing || !manualRunning;
     node('ruling-submit').disabled = changing || !rulingSelection();
   }
 
@@ -809,8 +803,6 @@ function renderAttention(attention, path) {
     clearReplay();
     selectedManual = duelId;
     autoReplay = autoplay;
-    manualRunning = false;
-    syncControls();
   }
 
   async function playReplay(attempt) {
@@ -849,11 +841,10 @@ function renderAttention(attention, path) {
   }
 
   function renderManualDuel(data) {
-    manualRunning = data.state === 'in_progress';
     node('manual-duel-id').textContent = data.duel_id;
     const result = data.result;
     const sameTeam = data.sides[0] === data.sides[1];
-    let summary = manualRunning ? '等待结算' : '模拟已结束';
+    let summary = data.state === 'in_progress' ? '等待结算' : '模拟已结束';
     if (result) {
       const winner = sameTeam ? ['蓝方', '红方'][result.winner] : result.winner;
       summary = winner ? `${winner} 获胜` : '双方判负';
@@ -865,11 +856,11 @@ function renderAttention(attention, path) {
       pending: '待提交', sending: '提交中', accepted: 'Arena 已受理', rejected: 'Arena 已拒绝',
       unconfirmed: '交付未确认', resend: '待补发', queued: 'Arena 排队中', running: 'Arena 执行中',
       finished: '待复核', platform_error: '平台故障', build_failed: '构建失败', void: '已作废',
-      held: '暂缓生效', awaiting_ruling: '待人工裁定', effective: '已生效'
+      held: '暂缓生效', awaiting_ruling: '待人工裁定', effective: '已生效', waived: '未纳入结算'
     };
     rows('manual-runs', data.attempts.map(attempt => [
       attempt.ordinal, attempt.has_replay ? replayButton(attempt) : attempt.run_id,
-      statuses[attempt.review || attempt.arena_result?.state || attempt.submission],
+      statuses[attempt.status],
       attempt.issue || attempt.ruling?.reason || '—'
     ]));
     if (autoReplay) {
@@ -877,7 +868,6 @@ function renderAttention(attention, path) {
       if (ready) playReplay(ready);
       else message('manual-replay-status', '暂无可播放的回放');
     }
-    syncControls();
   }
 
   async function request(path, options) {
@@ -1071,9 +1061,6 @@ function post(path, data) {
   node('manual-duel').addEventListener('change', event => {
     selectManual(event.target.value, true);
     refresh();
-  });
-  node('manual-stop').addEventListener('click', () => {
-    change(`${manualDuels}/${selectedManual}/stop`, '模拟已结束', undefined, {messageId: 'manual-message'});
   });
 
   node('ruling-target').addEventListener('change', () => {

@@ -53,15 +53,16 @@ def formal_maps(pools):
     return maps
 
 
-def _sides(body, *, allow_baseline=True, allow_same=False):
+def _sides(body, *, allow_baseline=True, allow_same=False, first_baseline=False):
     if not isinstance(body, dict) or body.keys() != {'sides'}:
         raise ContestError(400, 'INVALID_DUEL', '请求体须只包含 sides')
     sides = body['sides']
     if not isinstance(sides, list) or len(sides) != 2 or not all(isinstance(side, str) for side in sides):
         raise ContestError(400, 'INVALID_DUEL', 'sides 须包含两个编号')
-    team, opponent = sides
-    valid_opponent = TEAM_ID.fullmatch(opponent) or (allow_baseline and opponent in BASELINES)
-    if (team == opponent and not allow_same) or not TEAM_ID.fullmatch(team) or not valid_opponent:
+    first, second = sides
+    first_ok = TEAM_ID.fullmatch(first) or (first_baseline and first in BASELINES)
+    second_ok = TEAM_ID.fullmatch(second) or (allow_baseline and second in BASELINES)
+    if (first == second and not allow_same) or not first_ok or not second_ok:
         raise ContestError(400, 'INVALID_DUEL', '双方编号无效')
     return sides
 
@@ -196,8 +197,8 @@ class DuelService:
 
     def accept_manual(self, body):
         if not isinstance(body, dict) or body.keys() != {'sides', 'rules'} or body['rules'] != RULESET:
-            raise ContestError(400, 'INVALID_DUEL', '请填写双方队伍编号及当前规则（prelim）')
-        sides = _sides({'sides': body['sides']}, allow_baseline=False, allow_same=True)
+            raise ContestError(400, 'INVALID_DUEL', '请填写双方编号及当前规则（prelim）')
+        sides = _sides({'sides': body['sides']}, allow_same=True, first_baseline=True)
         with self.database.transaction() as connection:
             require_phase_available(connection, MANUAL_KIND)
             return self._schedule_ladder(connection, MANUAL_KIND, sides, 'duel-manual')
@@ -217,15 +218,6 @@ class DuelService:
                 WHERE kind = ? ORDER BY id DESC
             ''', (MANUAL_KIND,))
             return {'duels': [_manual_summary(row) for row in rows]}
-
-    def stop_manual(self, duel_id):
-        with self.database.transaction() as connection:
-            duel = require_duel(connection, duel_id, manual=True)
-            connection.execute('''
-                UPDATE duels SET closed_at = ?, awaiting_ruling = 0
-                WHERE id = ? AND closed_at IS NULL
-            ''', (datetime.now(ZONE).isoformat(timespec='microseconds'), duel['id']))
-        return {'duel_id': duel_id}
 
     def ladder_submissions(self, sides, since):
         sides = _sides({'sides': sides})
@@ -268,6 +260,11 @@ class DuelService:
     def show(self, duel_id, *, manual=False):
         with self.database.transaction(write=False) as connection:
             duel = require_duel(connection, duel_id, manual=manual)
+            settlement = json.loads(duel['result']) if duel['result'] is not None else None
+            result_runs = set()
+            if manual and settlement is not None:
+                result_runs.update(settlement.get('runs', ()))
+                result_runs.add(settlement.get('build_run_id'))
             attempts = []
             for row in connection.execute('''
                 SELECT g.ordinal, r.run_id, r.submission, r.arena_result, r.review, r.issue, r.ruling
@@ -279,12 +276,17 @@ class DuelService:
                     if record[field] is not None:
                         record[field] = json.loads(record[field])
                 if manual:
-                    record['has_replay'] = record['review'] in REPLAY_REVIEWS
+                    review = record['review']
+                    arena_state = (record['arena_result'] or {}).get('state')
+                    record['has_replay'] = review in REPLAY_REVIEWS
+                    record['status'] = review or arena_state or record['submission']
+                    if settlement is not None and review is None and record['run_id'] not in result_runs:
+                        record['status'] = 'waived'
                 attempts.append(record)
             result = {'duel_id': duel_id, 'batch_id': duel['batch_id'], 'attempts': attempts,
                       'issue': DUEL_TIE_ISSUE if duel['awaiting_ruling'] else None,
                       'ruling': json.loads(duel['ruling']) if duel['ruling'] is not None else None,
-                      'result': json.loads(duel['result']) if duel['result'] is not None else None}
+                      'result': settlement}
             if manual:
                 result.update(_manual_summary(duel))
                 result['state'] = ('finished' if result['result'] is not None else

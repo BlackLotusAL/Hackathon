@@ -5,7 +5,7 @@ from unittest import TestCase
 from engine.core import Game
 from engine.mapgen import generate, validate
 from engine.prelim import territory_value
-from engine.protocol import init_message, parse_reply, turn_message
+from engine.protocol import init_message, parse_reply
 from engine.verification import VerificationError, verify_replay
 from .helpers import case
 

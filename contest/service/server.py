@@ -30,7 +30,7 @@ ARENA_SUBMIT_WORKERS = 12
 WORK_IDLE_INTERVAL = 0.25
 DUEL_QUERY = re.compile(r'/contest/v1/duels/([^/]+)/(status|result)')
 LOAD_TEST_RESOURCE = re.compile(r'/admin/load-tests/([^/]+)(?:/(retry|stop))?')
-MANUAL_DUEL_RESOURCE = re.compile(r'/admin/duels/([^/]+)(?:/(stop))?')
+MANUAL_DUEL_RESOURCE = re.compile(r'/admin/duels/([^/]+)')
 REPLAY_RESOURCE = re.compile(r'/admin/runs/([^/]+)/replay')
 
 
@@ -200,7 +200,7 @@ class Admin:
         if load_test and load_test[2] is None:
             return http.reply(200, self.preliminary.load_test_progress(unquote(load_test[1])))
         manual_duel = MANUAL_DUEL_RESOURCE.fullmatch(path)
-        if manual_duel and manual_duel[2] is None:
+        if manual_duel:
             return http.reply(200, self.duels.show(unquote(manual_duel[1]), manual=True))
         replay = REPLAY_RESOURCE.fullmatch(path)
         if replay:
@@ -249,9 +249,6 @@ class Admin:
         if path == '/admin/check':
             body = http.read_json('INVALID_CHECK', '请填写 Bot 地址和当前规则（prelim）')
             return http.reply(200, check_bot(body))
-        manual_duel = MANUAL_DUEL_RESOURCE.fullmatch(path)
-        if manual_duel and manual_duel[2] == 'stop':
-            return http.reply(200, self.duels.stop_manual(unquote(manual_duel[1])))
         if path == '/admin/rulings':
             body = http.read_json('INVALID_RULING', '请填写裁定范围、编号、胜方和理由')
             ruling = self.rulings.record(body.get('scope'), body.get('target'), body.get('winner'),

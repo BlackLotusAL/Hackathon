@@ -151,6 +151,28 @@ class MatchSettlementTests(MatchFixture):
         result = contest.duels.show(duel, manual=True)['result']
         self.assertEqual((result['outcome'], result['winner'], result['games_won']), ('win', 0, {'0': 1, '1': 1}))
 
+    @case('L0-053', '手动对决允许基准 Bot 作为队伍的对手并安排同图换边')
+    def test_manual_duel_with_baseline_opponent(self):
+        contest = Contest(self.root / 'contest.sqlite')
+        sides = [TEAMS[0], 'bot001']
+        duel_id = contest.duels.accept_manual({'sides': sides, 'rules': 'prelim'})['duel_id']
+        first, second = contest.runs.claim_submissions(2)
+        self.assertEqual((first['duel_id'], second['duel_id']), (duel_id, duel_id))
+        self.assertCountEqual(first['bots'], sides)
+        self.assertEqual(second['bots'], first['bots'][::-1])
+        self.assertEqual(first['config'], second['config'])
+
+    @case('L0-054', '手动对决允许两侧均使用基准 Bot，也支持同一基准 Bot 自测')
+    def test_manual_duel_between_baselines(self):
+        contest = Contest(self.root / 'contest.sqlite')
+        for sides in (['bot001', 'bot002'], ['bot003', 'bot003']):
+            with self.subTest(sides=sides):
+                duel_id = contest.duels.accept_manual({'sides': sides, 'rules': 'prelim'})['duel_id']
+                self.assertEqual(contest.duels.show(duel_id, manual=True)['sides'], sides)
+                first, second = contest.runs.claim_submissions(2)
+                self.assertCountEqual(first['bots'], sides)
+                self.assertEqual(second['bots'], first['bots'][::-1])
+
     @case('L0-006', '固定三张正式地图后重启，仍按原六局计划和局序结算')
     def test_formal_preliminary_duel_finishes_using_its_stored_plan(self):
         maps = sealed_maps('prelim')
@@ -252,6 +274,41 @@ class MatchSettlementTests(MatchFixture):
                     self.assertEqual(client.json(path + '/status')['state'], 'finished')
                     self.assertEqual(contest.duels.show(duel_id)['attempts'][0]['review'], 'build_failed')
                     self.assertFalse(worker.submit_next())
+
+    @case('L0-055', '手动对决因构建失败提前结算后，剩余执行显示未纳入结算')
+    def test_settled_manual_duel_displays_unreviewed_sibling_as_waived(self):
+        contest = Contest(self.root / 'contest.sqlite')
+        arena = ArenaStub()
+        worker = ContestWorker(contest, self.root, arena)
+        for sibling_status in ('accepted', 'finished'):
+            with self.subTest(sibling_status=sibling_status):
+                duel_id = contest.duels.accept_manual({'sides': TEAMS, 'rules': 'prelim'})['duel_id']
+                self.assertTrue(worker.submit_next())
+                self.assertTrue(worker.submit_next())
+                first, second = arena.submitted[-2:]
+                bots = [dict(bot, state=state) for bot, state in zip(self.metadata(first), ('failed', 'succeeded'))]
+                arena_archive(self.root / 'runs' / first['run_id'], bots,
+                              state='build_failed', duel_started_at=STARTED)
+                arena.set_state(first['run_id'], 'build_failed')
+                self.assertTrue(worker.poll_next())
+                if sibling_status == 'finished':
+                    self.judge_archive(second, started_at=STARTED)
+                    arena.set_state(second['run_id'], 'finished')
+                    self.assertTrue(worker.poll_next())
+
+                before = contest.duels.show(duel_id, manual=True)
+                sibling_before = before['attempts'][1]
+                self.assertEqual((sibling_before['status'], sibling_before['review']), (sibling_status, None))
+                self.assertTrue(worker.review_next())
+
+                after = contest.duels.show(duel_id, manual=True)
+                build_failure, sibling_after = after['attempts']
+                self.assertEqual(after['state'], 'finished')
+                self.assertEqual(after['result']['build_run_id'], first['run_id'])
+                self.assertEqual((build_failure['status'], build_failure['review']), ('build_failed', 'build_failed'))
+                self.assertEqual(sibling_after, dict(sibling_before, status='waived'))
+                self.assertFalse(worker.poll_next())
+                self.assertFalse(worker.review_next())
 
     @case('L0-007', '故障重跑固定原计划，旧轮询响应和旧执行编号均不能生效')
     def test_retry_pins_the_plan_and_ignores_a_stale_poll(self):
