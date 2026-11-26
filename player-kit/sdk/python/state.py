@@ -2,9 +2,9 @@
 from dataclasses import dataclass, field
 from functools import cached_property
 
-from engine.board import GameMap
 from engine.game import Beam as GameBeam
 from engine.game import Game
+from engine.maps import GameMap
 
 
 @dataclass(frozen=True)

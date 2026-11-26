@@ -1,14 +1,17 @@
-"""Execute an Arena task and publish the referee's result and observations."""
+"""Read Arena's task and exit markers for the referee."""
 import time
 
-from engine import VERSION
-from engine.mapgen import load_map
-from engine.protocol import RUN_ID, dumps, json_object
-from engine.referee import HttpBot, Match
+from engine.maps import load_map
+from engine.match import HttpBot
+from engine.protocol import RUN_ID, json_object
 from engine.rules import RULESET
+
+from . import run_match
 
 
 class ContainerBot(HttpBot):
+    """Read the exit status that Arena publishes for a Bot."""
+
     def __init__(self, url, marker):
         super().__init__(url)
         self.marker = marker
@@ -58,9 +61,4 @@ def run_task(task_path, output, stage=None):
             raise ValueError('Bot 名称须为字符串')
         names.append(name)
         bots.append(ContainerBot(url, task_path.parent / 'exits' / f'p{seat}.json'))
-    result = Match(board, bots, names=names, run_id=run_id, out_dir=output).run()
-    result.update(version=VERSION, map_sha256=digest)
-    temporary = output / 'result.json.tmp'
-    temporary.write_text(dumps(result) + '\n', encoding='utf-8')
-    temporary.replace(output / 'result.json')
-    return result
+    return run_match(board, bots, names=names, run_id=run_id, map_sha256=digest, output=output)

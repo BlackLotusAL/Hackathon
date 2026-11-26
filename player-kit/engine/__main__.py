@@ -1,73 +1,72 @@
-"""Play one local match between two Bots."""
+"""Run the engine command for the Contest or player-kit distribution."""
 import argparse
-from datetime import datetime
+import json
 from pathlib import Path
-import secrets
-import sys
+import random
 
-from sdk.submission import KIT_ROOT
-
-from .maps import generate
-from .match import play_match
-from .replay import write_replay_index
+from .maps import draw, generate, load_map
+from .protocol import dumps, json_object
+from .replay import game_result, read_referee_log, verify_replay
+from .rules import RULESET
 
 
-BOTS_DIR = KIT_ROOT / 'bots'
-REASONS = {
-    'limit': '得分',
-    'lead_turns': '领先回合数',
-    'time': '累计响应时间',
-    'tie': '三项指标相同，待裁定',
-    'double_loss': '双方同时技术判负',
-    'startup': 'Bot 未就绪',
-    'crash': 'Bot 退出',
-    'errors': '累计错误达到上限',
-}
+def generate_maps(args):
+    seeds = ([args.seed + index for index in range(args.count)] if args.seed is not None
+             else [random.randrange(1, 10 ** 6) for _ in range(args.count)])
+    maps = [generate(seed, args.stage) for seed in seeds]
+    if args.out:
+        with args.out.open('w', encoding='utf-8') as output:
+            json.dump(maps, output, ensure_ascii=False, indent=1)
+        print('已保存 %d 张地图到 %s：%s' % (len(maps), args.out, ' '.join(board['id'] for board in maps)))
+        return
+    for board in maps:
+        defects = sum(row.count('#') for row in board['terrain'])
+        keys = sum(row.count('*') for row in board['terrain'])
+        zones = '、'.join(f"{len(zone['cells'])} 格" for zone in board['boost_zones'])
+        print(f"{board['id']}  缺陷 {defects} 格  关键图形区 {keys} 格  加速区 {zones}")
+        print(draw(board) + '\n')
 
 
-def resolve_bot(argument):
-    directory = Path(argument).expanduser()
-    if argument == directory.name and not directory.is_dir():
-        directory = BOTS_DIR / argument
-    return directory.resolve()
+def verify_recording(args):
+    if (args.map_file is None) != (args.map_sha256 is None):
+        raise ValueError('核对封存地图时请同时提供 --map-file 和 --map-sha256')
+    replay = json_object(args.replay.read_bytes())
+    board = None
+    if args.map_file is not None:
+        sealed = {'file': args.map_file.read_bytes().decode('utf-8'), 'sha256': args.map_sha256}
+        board, _ = load_map(sealed, replay['stage'])
+    log = read_referee_log(args.log_file) if args.log_file is not None else None
+    game = verify_replay(replay, board=board, log=log)
+    print(dumps(game_result(game)))
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog='python -m engine', description='在本地运行一局 Bot 对战')
-    bot_directory = '填写 bots/ 下的目录名或包含 bot.json 的目录路径'
-    parser.add_argument('p1', metavar='P1', help=f'第一个 Bot，{bot_directory}')
-    parser.add_argument('p2', metavar='P2', help=f'第二个 Bot，{bot_directory}')
-    parser.add_argument('--seed', type=int, help='整数地图种子。省略时随机选取')
+    if (Path(__file__).resolve().parents[1] / 'sdk' / 'submission.py').is_file():
+        from .match import main as match_main
+        return match_main(argv)
+
+    parser = argparse.ArgumentParser(
+        prog='python -m engine', description='曝光领地规则引擎工具',
+        epilog='选手本地对战请在 player-kit/ 目录运行 python -m engine P1 P2 [--seed SEED]。',
+    )
+    commands = parser.add_subparsers(dest='command', required=True)
+    maps = commands.add_parser('mapgen', help='生成天梯或测试用随机地图')
+    maps.add_argument('--seed', type=int, default=None, help='起始种子；不填则随机')
+    maps.add_argument('--count', type=int, default=1)
+    maps.add_argument('--stage', default=RULESET, choices=(RULESET,))
+    maps.add_argument('--out', type=Path, help='保存为 JSON 数组。不填则在终端绘制')
+    maps.set_defaults(handler=generate_maps)
+    replay = commands.add_parser('verify-replay', help='独立复核对局回放')
+    replay.add_argument('replay', type=Path)
+    replay.add_argument('--log-file', type=Path, help='裁判的 log.jsonl，可同时核对公开观测和日志')
+    replay.add_argument('--map-file', type=Path, help='公开的封存地图原文件')
+    replay.add_argument('--map-sha256', help='赛前公布的地图 SHA-256')
+    replay.set_defaults(handler=verify_recording)
     args = parser.parse_args(argv)
-
     try:
-        p1 = resolve_bot(args.p1)
-        p2 = resolve_bot(args.p2)
-        players = [p1.name, p2.name]
-        board = generate(args.seed)
-        print(f'地图 {board["id"]} · {players[0]} 对 {players[1]}', flush=True)
-        name = f'{datetime.now():%Y%m%d-%H%M%S}-{board["id"]}-{secrets.token_hex(4)}.json'
-        replay_path = Path('replays') / name
-        game, errors = play_match(board, p1, p2, replay_path=replay_path)
-    except (OSError, ValueError) as error:
+        args.handler(args)
+    except (OSError, ValueError, KeyError, TypeError) as error:
         parser.exit(1, f'{error}\n')
-    except KeyboardInterrupt:
-        parser.exit(130, '对局已停止\n')
-
-    print(f'完成 {game.turn}/{game.max_turns} 回合')
-    for seat, name in enumerate(players):
-        print(f'  {seat} 号方 {name}  得分 {game.score(seat)}'
-              f'  领先 {game.lead_turns[seat]} 回合  响应时间 {game.time_us[seat]} 微秒  错误 {errors[seat]} 次')
-    outcome = '未判定胜方' if game.winner is None else f'{game.winner} 号方 {players[game.winner]} 获胜'
-    if game.reason == 'double_loss':
-        outcome = '双方各记一负'
-    print(f'{outcome}（{REASONS[game.reason]}）')
-    print(f'回放已保存至 {replay_path}')
-    try:
-        write_replay_index(replay_path.parent)
-    except OSError as error:
-        print(f'无法更新回放列表（{error}）', file=sys.stderr)
-    return int(game.turn < game.max_turns)
 
 
 if __name__ == '__main__':

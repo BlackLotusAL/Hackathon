@@ -6,7 +6,28 @@ from pathlib import Path
 import sys
 
 from .http import run
-from .strategy import StrategyRunner
+from .state import InitState, TurnState
+
+
+class StrategyRunner:
+    """Construct a strategy from typed init data and pass it typed turns."""
+
+    def __init__(self, factory):
+        self.factory = factory
+        self.init = None
+        self.strategy = None
+
+    def handle(self, msg):
+        kind = msg['type']
+        if kind == 'init':
+            self.init = InitState.from_message(msg)
+            self.strategy = self.factory(self.init)
+        elif kind == 'turn':
+            state = TurnState.from_message(self.init, msg)
+            return {'turn': state.turn, 'cmd': self.strategy.act(state)}
+        elif hasattr(self.strategy, 'end'):
+            self.strategy.end(msg)
+        return None
 
 
 def main(argv=None):

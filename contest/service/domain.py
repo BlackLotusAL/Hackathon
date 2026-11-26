@@ -8,7 +8,6 @@ from engine.rules import RULESET
 
 DUEL_ID = re.compile(r'duel-[A-Za-z0-9_-]+')
 ZONE = timezone(timedelta(hours=8))
-PLATFORM_ERRORS = ('judge_crash', 'wall_timeout', 'container_start_failed', 'slot_unhealthy', 'build_platform_error')
 TEAM_ID = re.compile(r'team[0-9]{3}')
 BASELINES = ('bot001', 'bot002', 'bot003')
 OFFICIAL_BATCH = 'official'

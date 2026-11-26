@@ -127,6 +127,12 @@ BOT_HOST=127.0.0.1 BOT_PORT=18102 \
 
 ## 构建裁判镜像
 
+`contest/engine` 是引擎源码的唯一维护源，本地对局和正式裁判都使用 `engine.match.Match`。更新材料包时，从用于构建裁判镜像的 Contest 提交复制 `contest/engine/`，整体替换 `player-kit/engine/`。
+
+`game.py` 负责回合模拟，`maps.py` 负责地图解析、校验与生成，`rules.py` 定义规则参数与判负逻辑，`protocol.py` 定义 Bot 消息。`match.py` 负责 Bot 通信、对局执行及本地进程管理，`replay.py` 负责回放记录、复核和索引。
+
+Arena 准备任务文件、监控 Bot 容器并发布共享归档。镜像入口通过 `judge/task.py` 读取 Arena 提供的任务文件和退出标记，调用 `judge.run_match` 执行单局并将结果、回放和日志写入 `/out`。
+
 在仓库根目录执行。
 
 ```sh

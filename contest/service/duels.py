@@ -5,9 +5,9 @@ import secrets
 from typing import NamedTuple, Optional
 from uuid import uuid4
 
-from engine.rules import PARAMS, RULESET, TIEBREAK_METRICS, compare_metrics
-from engine.mapgen import load_map
+from engine.maps import load_map
 from engine.protocol import RUN_ID, json_object
+from engine.rules import PARAMS, RULESET, TIEBREAK_METRICS, compare_metrics
 
 from .domain import (
     ACTIVE_DUELS, BASELINES, DUEL_ID, DUEL_KINDS, DUEL_RULING_LABEL, DUEL_TIE_ISSUE,

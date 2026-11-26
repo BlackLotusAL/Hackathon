@@ -7,14 +7,16 @@ from unittest.mock import call, patch
 from engine import VERSION
 from engine.game import Game
 from engine.maps import generate
-from engine.match import play_match
+from engine.match import Match, play_match
 from engine.protocol import init_message, turn_message
-from engine.replay import write_replay_index
+from engine.replay import game_result, read_referee_log, verify_replay, write_replay_index
 from engine.rules import PARAMS
 from sdk import InitState, TurnState
 
 
 class ScriptedBot:
+    exit_info = None
+
     def __init__(self, commands, elapsed_us, status='ok'):
         self.commands = commands
         self.elapsed_us = elapsed_us
@@ -35,7 +37,7 @@ class ScriptedBot:
         self.run_ids.add(run_id)
         index = (message['turn'] - 1) % len(self.commands)
         command = self.commands[index] if self.status == 'ok' else None
-        return command, self.status, self.elapsed_us
+        return command, self.status, None, self.elapsed_us
 
     def exited(self):
         return False
@@ -61,13 +63,34 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(second.map.to_payload(), opening['map'])
 
     def record_match(self, bots):
+        board = generate(42)
         with TemporaryDirectory() as temporary:
-            path = Path(temporary) / 'replays' / 'match.json'
+            root = Path(temporary)
+            path = root / 'replays' / 'match.json'
             with patch('engine.match.ProcessBot', side_effect=bots) as process_bot:
-                game, errors = play_match(generate(42), 'submission', 'bot002', replay_path=path)
+                game, errors = play_match(board, 'submission', 'bot002', replay_path=path)
             self.assertEqual(process_bot.call_args_list, [call('submission'), call('bot002')])
             self.assertEqual(list(path.parent.iterdir()), [path])
-            return game, errors, json.loads(path.read_text(encoding='utf-8'))
+            replay = json.loads(path.read_text(encoding='utf-8'))
+
+            referee_bots = [ScriptedBot(bot.commands, bot.elapsed_us, bot.status) for bot in bots]
+            output = root / 'referee'
+            result = Match(board, referee_bots, names=['submission', 'bot002'],
+                           run_id='run-42.1', out_dir=output).run()
+            official = json.loads((output / 'replay.json').read_text(encoding='utf-8'))
+            log = read_referee_log(output / 'log.jsonl')
+            recomputed = verify_replay(official, board=board, log=log)
+
+            for key in ('version', 'stage', 'map', 'players', 'params', 'init', 'observations'):
+                self.assertEqual(replay[key], official[key])
+            self.assertEqual(len(replay['frames']), len(official['frames']))
+            for local_frame, official_frame in zip(replay['frames'], official['frames']):
+                self.assertEqual(local_frame, official_frame, f'第 {official_frame["turn"]} 回合')
+            self.assertEqual(game_result(game), game_result(recomputed))
+            self.assertEqual(game_result(verify_replay(replay)), game_result(recomputed))
+            self.assertEqual(replay['result'], dict(official['result'], errors=result['errors']))
+            self.assertEqual(errors, result['errors'])
+            return game, errors, replay
 
     def test_completed_match_uses_integer_response_times_to_break_ties(self):
         bots = [ScriptedBot('URDL', 1001), ScriptedBot('DLUR', 1004)]
@@ -77,8 +100,8 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(game.metrics()['score'], [9, 9])
         self.assertEqual(game.time_us, [600600, 602400])
         self.assertEqual((game.winner, game.reason, errors), (0, 'time', [0, 0]))
-        self.assertEqual((replay['version'], replay['source']), (VERSION, 'practice'))
-        self.assertFalse({'format', 'engine_version'} & replay.keys())
+        self.assertEqual(replay['version'], VERSION)
+        self.assertFalse({'format', 'engine_version', 'source'} & replay.keys())
         self.assertEqual(replay['players'], ['submission', 'bot002'])
         self.assertEqual(len(replay['frames']), 600)
         self.assertEqual(replay['result']['time_us'], game.time_us)
@@ -95,6 +118,13 @@ class MatchTests(unittest.TestCase):
             self.assertEqual(bot.notices, ['init', 'end'])
             self.assertTrue(bot.closed)
 
+    def test_frames_with_territory_changes_match_the_referee(self):
+        bots = [ScriptedBot('RRRRUUUULLLLDDDD', 1301), ScriptedBot('D', 1302)]
+        game, errors, replay = self.record_match(bots)
+
+        self.assertEqual((game.turn, errors), (600, [0, 0]))
+        self.assertTrue(any(frame['d'] for frame in replay['frames']))
+
     def test_forfeit_counts_both_requests_without_settling_the_final_turn(self):
         bots = [ScriptedBot('U', 220000, status='timeout'), ScriptedBot('D', 1003)]
         game, errors, replay = self.record_match(bots)
@@ -107,7 +137,7 @@ class MatchTests(unittest.TestCase):
         self.assertEqual(replay['result']['errors'], errors)
         self.assertEqual(replay['observations'][-2]['turn'], 10)
         self.assertEqual(replay['observations'][-2]['us'], [PARAMS['turn_ms'] * 1000, 1003])
-        self.assertEqual(replay['observations'][-1], {'phase': 'end', 'reason': 'errors'})
+        self.assertEqual(replay['observations'][-1], {'phase': 'end', 'reason': 'errors', 'exits': [False, False]})
         self.assertTrue(all(bot.closed for bot in bots))
 
     def test_simultaneous_process_exit_stops_before_settling_the_request(self):
@@ -122,8 +152,11 @@ class MatchTests(unittest.TestCase):
                 '    def act(self, state):\n'
                 '        if state.turn == 3: os._exit(1)\n'
                 '        return state.me.dir\n', encoding='utf-8')
-            game, _ = play_match(generate(42), root, root)
+            path = root / 'replays' / 'match.json'
+            game, _ = play_match(generate(42), root, root, replay_path=path)
             self.assertEqual((game.turn, game.reason, game.winner), (2, 'double_loss', None))
+            replay = json.loads(path.read_text(encoding='utf-8'))
+            self.assertEqual(replay['observations'][-2]['exits'], [True, True])
 
     def test_replay_index_only_lists_current_version(self):
         with TemporaryDirectory() as temporary:

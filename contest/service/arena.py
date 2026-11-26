@@ -1,23 +1,27 @@
-"""Arena client, run scheduling and archive review."""
+"""Contest's Arena requests, run tracking and archive review."""
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime
 from http.client import HTTPConnection, HTTPException
 import json
-from time import time
+from threading import Thread
+from time import monotonic, time
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
 from engine import VERSION
-from engine.mapgen import load_map
+from engine.maps import load_map
 from engine.protocol import RUN_ID, dumps, json_object
-from engine.replay import game_result
+from engine.replay import VerificationError, check_fields, game_result, read_referee_log, verify_replay
 from engine.rules import RULESET
-from engine.verification import VerificationError, check_fields, read_referee_log, verify_replay
 
-from .domain import ACTIVE_DUELS, BASELINES, DUEL_PHASE, GAME_TIE_ISSUE, PLATFORM_ERRORS, ZONE, ContestError, encode
+from .database import DatabaseStopping
+from .domain import ACTIVE_DUELS, DUEL_PHASE, GAME_TIE_ISSUE, ZONE, ContestError, encode
 from .duels import insert_attempt, settle_duel
 
 
 ACTIVE_ARENA_STATES = ('queued', 'running')
+PLATFORM_ERRORS = ('judge_crash', 'wall_timeout', 'container_start_failed', 'slot_unhealthy', 'build_platform_error')
 RUN_QUERY_BATCH_SIZE = 100
 
 
@@ -32,6 +36,8 @@ def parse_peer_url(base_url):
 
 
 class ArenaClient:
+    """Call Arena's submission, run query and capacity endpoints."""
+
     def __init__(self, base_url):
         url = parse_peer_url(base_url)
         self.host, self.port, self.prefix = url.hostname, url.port, url.path.rstrip('/')
@@ -209,6 +215,8 @@ def retry_attempt(connection, run_id, *, batch_id=None):
 
 
 class ExecutionService:
+    """Track Contest submissions, Arena observations and local review decisions."""
+
     def __init__(self, database):
         self.database = database
 
@@ -244,6 +252,7 @@ class ExecutionService:
             ''', (submission, issue, run_id))
 
     def recover_submissions(self):
+        """Mark interrupted submissions for status queries."""
         with self.database.transaction() as connection:
             connection.execute(f'''
                 UPDATE runs SET submission = 'unconfirmed'
@@ -321,13 +330,17 @@ class ExecutionService:
                 if (review == 'effective' and manifest['result']['winner'] is None
                         and manifest['result'].get('reason') != 'double_loss'):
                     review, issue = 'awaiting_ruling', GAME_TIE_ISSUE
-                commits = encode({bot['team_id']: bot['commit'] for bot in manifest['bots'] if 'commit' in bot})
+                pinned = duel['commits']
+                commits = json.loads(pinned) if pinned is not None else {}
+                reported = {bot['team_id']: bot['commit'] for bot in manifest['bots'] if 'commit' in bot}
+                updated_commits = encode({**commits, **reported})
                 started = manifest.get('duel_started_at') if duel['kind'].endswith('-ladder') else None
-                if duel['commits'] is None:
-                    connection.execute('UPDATE duels SET commits = ?, started_at = ? WHERE id = ?',
-                                       (commits, started, duel['id']))
-                elif duel['commits'] != commits or duel['started_at'] != started:
+                if pinned is not None and (duel['started_at'] != started or any(
+                        team in commits and commits[team] != commit for team, commit in reported.items())):
                     review, issue = 'held', '同场执行的提交版本或天梯开始时间不一致'
+                elif pinned != updated_commits:
+                    connection.execute('UPDATE duels SET commits = ?, started_at = ? WHERE id = ?',
+                                       (updated_commits, started, duel['id']))
             connection.execute('UPDATE runs SET review = ?, issue = ?, manifest = ? WHERE run_id = ?',
                                (review, issue, encode(manifest) if manifest is not None else None, run_id))
             if review in ('effective', 'build_failed'):
@@ -368,7 +381,7 @@ class ExecutionService:
 
 
 def review_archive(root, request, state, *, ladder):
-    """Verify immutable evidence before it can participate in settlement."""
+    """Verify Arena's published evidence before it can participate in settlement."""
     run_id = request['run_id']
     if not RUN_ID.fullmatch(run_id):
         raise VerificationError('执行编号无效')
@@ -383,11 +396,11 @@ def review_archive(root, request, state, *, ladder):
             raise VerificationError('归档队伍与预定出生点不一致')
         for bot in bots:
             commit = bot.get('commit')
-            if bot['team_id'] not in BASELINES or 'commit' in bot:
-                if not isinstance(commit, str) or not commit:
-                    raise VerificationError('归档缺少有效提交号')
-        if bots[0]['team_id'] == bots[1]['team_id'] and bots[0].get('commit') != bots[1].get('commit'):
-            raise VerificationError('同队对决两侧的提交版本不一致')
+            if 'commit' in bot and (not isinstance(commit, str) or not commit.strip()):
+                raise VerificationError(f"归档中 {bot['team_id']} 的提交号无效")
+        if (bots[0]['team_id'] == bots[1]['team_id'] and all('commit' in bot for bot in bots)
+                and bots[0]['commit'] != bots[1]['commit']):
+            raise VerificationError('同一参赛方在两个出生点的提交版本不一致')
         if ladder:
             started = manifest['duel_started_at']
             if not started.endswith('+08:00') or datetime.fromisoformat(started).utcoffset() != ZONE.utcoffset(None):
@@ -421,3 +434,133 @@ def review_archive(root, request, state, *, ladder):
         raise
     except (OSError, ValueError, KeyError, IndexError, TypeError, AttributeError, RuntimeError) as error:
         raise VerificationError(f'无法复核 {run_id} 的归档 ({error})') from error
+
+
+PRELIMINARY_POLL_INTERVAL = 10
+ARENA_SUBMIT_WORKERS = 12
+WORK_IDLE_INTERVAL = 0.25
+
+
+class ContestWorker:
+    """Submit and poll runs in Arena and review the published archives."""
+
+    def __init__(self, contest, archive_root, arena):
+        self.contest, self.archive_root = contest, archive_root
+        self.arena = arena
+
+    def submit_next(self):
+        request = self.contest.runs.claim()
+        if request is None:
+            return False
+        self._submit(request)
+        return True
+
+    def _submit(self, request):
+        status = self.arena.submit(request)
+        self.contest.runs.complete_submission(request['run_id'], status)
+
+    def _submission_capacity(self):
+        status = self.arena.status() or {}
+        slots = status.get('slots')
+        idle = slots.get('idle') if isinstance(slots, dict) else None
+        if type(idle) is not int or idle < 0:
+            return 1  # Keep dispatching serially when slot status is unavailable.
+        queued = status.get('queue', 0)
+        if type(queued) is not int or queued < 0:
+            return min(1, idle)
+        return min(ARENA_SUBMIT_WORKERS, max(0, idle - queued))
+
+    def submit_available(self, stop):
+        runs = self.contest.runs
+        submitting = set()
+        with ThreadPoolExecutor(max_workers=ARENA_SUBMIT_WORKERS, thread_name_prefix='arena-submit') as executor:
+            while not stop.is_set():
+                completed = {future for future in submitting if future.done()}
+                for future in completed:
+                    future.result()
+                submitting.difference_update(completed)
+
+                if len(submitting) < ARENA_SUBMIT_WORKERS and runs.has_ready_submissions():
+                    # In-flight submissions may not be counted in Arena's snapshot yet.
+                    limit = self._submission_capacity() - len(submitting)
+                    if limit > 0 and not stop.is_set():
+                        submitting.update(executor.submit(self._submit, request)
+                                          for request in runs.claim_submissions(limit))
+                stop.wait(WORK_IDLE_INTERVAL)
+
+    def poll_next(self):
+        claim = self.contest.runs.claim_poll()
+        if claim is None:
+            return False
+        self._poll_runs((claim,))
+        return True
+
+    def _poll_runs(self, claims):
+        status, payload = self.arena.query_runs([claim.run_id for claim in claims])
+        self.contest.runs.complete_polls(claims, status, payload)
+
+    def poll_preliminary_round(self, stop=None):
+        targets = self.contest.runs.preliminary_poll_targets()
+        for offset in range(0, len(targets), RUN_QUERY_BATCH_SIZE):
+            if stop is not None and stop.is_set():
+                return
+            batch = targets[offset:offset + RUN_QUERY_BATCH_SIZE]
+            claims = self.contest.runs.claim_preliminary_polls(batch)
+            if claims:
+                self._poll_runs(claims)
+
+    def poll_preliminary(self, stop):
+        next_round = monotonic()
+        while not stop.wait(max(0, next_round - monotonic())):
+            self.poll_preliminary_round(stop)
+            # Advance to the next scheduled tick, skipping ticks consumed by this round.
+            elapsed = monotonic() - next_round
+            intervals = int(elapsed // PRELIMINARY_POLL_INTERVAL) + 1
+            next_round += intervals * PRELIMINARY_POLL_INTERVAL
+
+    def review_next(self):
+        pending = self.contest.runs.next_review()
+        if pending is None:
+            return False
+        request, arena_result, ladder = pending
+        run_id, state = request['run_id'], arena_result['state']
+        if state == 'platform_error':
+            self.contest.runs.complete_review(run_id, 'void', issue=arena_result['reason'])
+            return True
+        try:
+            manifest = review_archive(self.archive_root, request, state, ladder=ladder)
+        except VerificationError as error:
+            self.contest.runs.complete_review(run_id, 'held', issue=str(error))
+        else:
+            review = 'effective' if state == 'finished' else 'build_failed'
+            self.contest.runs.complete_review(run_id, review, manifest=manifest)
+        return True
+
+    @contextmanager
+    def running(self, stop):
+        """Start and join the Contest workers with a shared shutdown event."""
+        def work(step):
+            while not stop.is_set():
+                if not step():
+                    stop.wait(WORK_IDLE_INTERVAL)
+
+        def run_worker(task, *args):
+            try:
+                task(*args)
+            except DatabaseStopping:
+                return
+
+        steps = (self.poll_next, self.review_next)
+        workers = [Thread(target=run_worker, args=(work, step), daemon=True, name=step.__name__) for step in steps]
+        workers.extend(Thread(target=run_worker, args=(task, stop), daemon=True, name=task.__name__)
+                       for task in (self.submit_available, self.poll_preliminary))
+        started = []
+        try:
+            for thread in workers:
+                thread.start()
+                started.append(thread)
+            yield
+        finally:
+            stop.set()
+            for thread in started:
+                thread.join()

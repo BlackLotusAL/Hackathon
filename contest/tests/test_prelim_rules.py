@@ -2,11 +2,10 @@
 from copy import deepcopy
 from unittest import TestCase
 
-from engine.core import Game
-from engine.mapgen import generate, validate
-from engine.prelim import territory_value
+from engine.game import Game, territory_value
+from engine.maps import generate, validate
 from engine.protocol import init_message, parse_reply
-from engine.verification import VerificationError, verify_replay
+from engine.replay import VerificationError, verify_replay
 from .helpers import case
 
 

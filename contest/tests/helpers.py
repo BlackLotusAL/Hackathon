@@ -22,8 +22,7 @@ from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 
-from engine.board import GameMap
-from engine.mapgen import generate
+from engine.maps import GameMap, generate
 from engine.protocol import dumps, json_object
 from judge.task import run_task
 from service.duels import insert_plan
@@ -424,15 +423,10 @@ class MatchFixture(WorkspaceFixture):
                 'config': {'map': {'seed': 42}}}
 
     def metadata(self, request):
-        bots = []
-        for team in request['bots']:
-            entry = {'team_id': team}
-            if team in self.commits:
-                entry['commit'] = self.commits[team]
-            elif team.startswith('t'):
-                entry['commit'] = team[-3:] * 13 + '0'
-            bots.append(entry)
-        return bots
+        return [
+            {'team_id': team, 'commit': self.commits.get(team, hashlib.sha256(team.encode('utf-8')).hexdigest())}
+            for team in request['bots']
+        ]
 
     def judge_archive(self, request, bots=None, *, started_at=None, archive_root=None):
         root = archive_root or self.root

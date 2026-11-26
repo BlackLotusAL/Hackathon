@@ -1,13 +1,14 @@
+import json
+
 from .helpers import (TEAMS, ArenaStub, Bot, HttpClient, MatchFixture, arena_archive, case,
                       contest_handler, plan_duel, run_query_payload, sealed_maps)
 
 from service.arena import review_archive
 from service.duels import EffectiveGame, settle
 from service.server import Contest, ContestWorker
-from engine.rules import TIEBREAK_METRICS
 from engine.protocol import dumps
-from engine.replay import game_result
-from engine.verification import VerificationError, verify_replay
+from engine.replay import VerificationError, game_result, verify_replay
+from engine.rules import TIEBREAK_METRICS
 
 
 STARTED = '2026-11-01T14:05:00+08:00'
@@ -366,6 +367,49 @@ class MatchSettlementTests(MatchFixture):
         old = contest.duels.show(duel_id)['attempts'][0]
         self.assertEqual(old['review'], 'void')
         self.assertIsNone(old['arena_result'])
+
+    @case('L0-056', '双方提交号均可省略，已记录的版本在换边后仍会核对')
+    def test_optional_commits_are_checked_for_both_sides(self):
+        contest = Contest(self.root / 'contest.sqlite')
+        arena = ArenaStub()
+        worker = ContestWorker(contest, self.root, arena)
+        duel_id = contest.duels.accept({'sides': [TEAMS[0], 'bot002']})['duel_id']
+        self.assertTrue(worker.submit_next())
+        first = arena.submitted[-1]
+        output, manifest, _ = self.judge_archive(first, [Bot('U'), Bot('D', exit_after_reply=True)],
+                                                 started_at=STARTED)
+        without_commits = [{'team_id': team} for team in first['bots']]
+        unversioned = arena_archive(output, without_commits, duel_started_at=STARTED)
+        self.assertEqual(review_archive(self.root, first, 'finished', ladder=True), unversioned)
+
+        bots = [dict(bot) for bot in manifest['bots']]
+        next(bot for bot in bots if bot['team_id'] == TEAMS[0]).pop('commit')
+        arena_archive(output, bots, duel_started_at=STARTED)
+        self.poll_and_review(arena, worker, first['run_id'], 'finished')
+        self.assertEqual(contest.duels.show(duel_id)['attempts'][0]['review'], 'effective')
+
+        self.assertTrue(worker.submit_next())
+        second = arena.submitted[-1]
+        self.assertEqual(second['bots'], first['bots'][::-1])
+        output = self.root / 'runs' / second['run_id']
+        bots = [dict(bot, state='failed') for bot in self.metadata(second)]
+        expected = {bot['team_id']: bot['commit'] for bot in bots}
+        baseline = next(bot for bot in bots if bot['team_id'] == 'bot002')
+        baseline['commit'] = 'f' * 40
+        arena_archive(output, bots, state='build_failed', duel_started_at=STARTED)
+        self.poll_and_review(arena, worker, second['run_id'], 'build_failed')
+        attempt = contest.duels.show(duel_id)['attempts'][1]
+        self.assertEqual(attempt['review'], 'held')
+        self.assertIn('提交版本', attempt['issue'])
+
+        baseline.pop('commit')
+        arena_archive(output, bots, state='build_failed', duel_started_at=STARTED)
+        contest.runs.recheck(second['run_id'])
+        self.assertTrue(worker.review_next())
+        self.assertEqual(contest.duels.show(duel_id)['attempts'][1]['review'], 'build_failed')
+        with contest.database.transaction(write=False) as connection:
+            row = connection.execute('SELECT commits FROM duels WHERE duel_id = ?', (duel_id,)).fetchone()
+        self.assertEqual(json.loads(row['commits']), expected)
 
     @case('L0-008', '天梯乱序读取时返回同赛段双方最近确认的前序对决')
     def test_ladder_queries_link_each_sides_previous_confirmed_duel(self):

@@ -27,7 +27,7 @@ HTTP 报文与归档中的 JSON、JSONL 使用 UTF-8。错误响应是包含稳�
 | `run_id` | string | 必填，由 Contest 分配，匹配 `run-[0-9]+\.[1-9][0-9]*`。格式为 `run-<局号>.<尝试次数>`，局号在同一归档中唯一，尝试次数从 1 开始 |
 | `duel_id` | string | 必填，整场对决编号，匹配 `duel-[A-Za-z0-9_-]+`。同场各局和重跑使用同一编号 |
 | `rules` | string | 必填，固定填 `prelim`，用于匹配裁判镜像和选手材料包 |
-| `bots` | string[2] | 必填，两项参赛方编号。队伍编号为 `team` 加三位数字，基准编号为 `bot001`、`bot002`、`bot003`。下标 0、1 对应该局的出生点。后台单场模拟允许两项为同一队伍编号，其他对决使用不同编号 |
+| `bots` | string[2] | 必填，两项参赛方编号。队伍编号为 `team` 加三位数字，基准编号为 `bot001`、`bot002`、`bot003`。下标 0、1 对应该局的出生点。后台单场模拟允许两项为同一参赛方编号，其他对决使用不同编号 |
 | `config` | object | 必填，原样交付给裁判的对局配置 |
 | `config.map` | object | 必填，按下表提供一种地图配置 |
 
@@ -257,7 +257,7 @@ Linux 宿主机使用 `/var/hackathon/archives` 作为持久化共享归档目�
 
 | 字段 | 含义 |
 | --- | --- |
-| `bots` | 按请求的出生点顺序提供两项，每项包含与请求一致的 `team_id`。参赛队伍必填实际固定的 `commit`，基准 Bot 可省略 `commit`。`bots[].state` 仅用于构建失败清单 |
+| `bots` | 按请求的出生点顺序提供两项。每项必填与请求一致的 `team_id`。`commit` 可省略，提供时填写实际固定的提交号。`bots[].state` 仅用于构建失败清单 |
 | `duel_started_at` | 天梯对决必填，使用第 6.1 节保存的时间字符串，格式为带 `+08:00` 的 ISO 8601。初赛单循环和压测可省略 |
 | `result.run_id` | 必填字符串，取自裁判原始输出，须与本次完整 `run_id` 一致，含尝试后缀，例如 `run-7001.2` |
 | `result.version` | 必填，裁判输出的 `v1` |
@@ -268,7 +268,7 @@ Linux 宿主机使用 `/var/hackathon/archives` 作为持久化共享归档目�
 
 ### 5.2 构建失败清单
 
-`build_failed` 的 `match.json` 只包含 `bots` 和适用的 `duel_started_at`。双方都须提供已确认的 `bots[].state`，取 `succeeded` 或 `failed`，至少一方因自身提交失败。
+`build_failed` 的 `match.json` 只包含 `bots` 和适用的 `duel_started_at`。双方都须提供已确认的 `bots[].state`，取 `succeeded` 或 `failed`，至少一方因自身提交失败。`commit` 的填写规则与完成清单一致。
 
 下例为初赛单循环中 `duel-prelim-12` 的构建双败清单，路径为 `runs/run-1.1/match.json`。本例省略天梯字段 `duel_started_at`。Contest 用 `run-1.1` 作为结算中的 `build_run_id`。`team001` 的构建日志若存在，位于 `builds/team001/run-1.1.log`。
 
@@ -313,11 +313,13 @@ Linux 宿主机使用 `/var/hackathon/archives` 作为持久化共享归档目�
 
 ### 6.1 固定参赛版本与开始时间
 
-天梯对决使用对决开始时各队仓库的 `main` 分支提交，基准 Bot 使用当期版本。初赛单循环使用提交截止、仓库锁定时记录的 `main` 分支最终提交。独立批次使用批次队伍的已固定提交，`duel_id` 以 `duel-load-` 开头，`run_id` 继续由 Contest 在同一编号序列中分配。
+天梯对决使用对决开始时各队仓库的 `master` 分支提交，基准 Bot 使用当期发布的代码提交。初赛单循环使用提交截止、仓库锁定时记录的 `master` 分支最终提交。独立批次使用批次队伍的已固定提交，`duel_id` 以 `duel-load-` 开头，`run_id` 继续由 Contest 在同一编号序列中分配。
 
 首次构建前按 `duel_id` 原子创建并持久保存参赛方编号与固定版本的对应关系。并发到达的同场任务共享同一份固定记录。同场各局及重跑按参赛方编号取固定版本，再按该局 `bots` 的顺序分配到出生点。首次尝试未生成归档时，固定记录仍须保留。
 
 天梯将 `duel_started_at` 与双方固定版本一并保存。同场各局及重跑的清单使用同一时间字符串，保留原有小数精度。
+
+Contest 按参赛方编号核对同场归档中已提供的 `commit`。某局省略该字段时，Contest 保留此前记录的提交号。
 
 ### 6.2 镜像交付与任务文件
 

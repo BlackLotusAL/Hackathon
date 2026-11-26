@@ -4,10 +4,9 @@ import shutil
 from unittest.mock import patch
 
 from engine import VERSION
+from engine.match import HttpBot
 from engine.protocol import dumps, json_object
-from engine.referee import HttpBot
-from engine.replay import game_result
-from engine.verification import verify_replay
+from engine.replay import game_result, verify_replay
 from judge.task import ContainerBot, run_task
 from service.arena import review_archive
 from service.server import Contest, ContestWorker
@@ -73,6 +72,7 @@ class JudgeTests(MatchFixture):
             self.assertEqual(json.loads(verified.stdout), replay['result'])
             # Extra fields in an earlier archive with the same gameplay may be ignored.
             compatible = json_object((output / 'replay.json').read_bytes())
+            compatible['source'] = 'practice'
             compatible['map']['old_metadata'] = []
             for snapshot in [compatible['init'], *compatible['frames']]:
                 for beam in snapshot['beams']:
@@ -98,7 +98,9 @@ class JudgeTests(MatchFixture):
             ladder = kind.endswith('-ladder')
             request = self.request(stage)
             pools = {}
-            if not ladder:
+            if ladder:
+                request['bots'] = [request['bots'][0], 'bot002']
+            else:
                 pools[stage] = sealed_maps(stage)
                 request['config']['map'] = pools[stage][0]
             corpus = self.root / ('corpus-' + kind)
@@ -147,9 +149,12 @@ class JudgeTests(MatchFixture):
         yield ('missing-run-id', 'match.json', dumps(dict(manifest, result=without_run_id)))
         yield ('wrong-manifest-version', 'match.json', dumps(dict(manifest, result=dict(single, version='v2'))))
         yield ('wrong-replay-version', 'replay.json', dumps(dict(replay, version='v2')))
-        yield ('practice-replay', 'replay.json', dumps(dict(replay, source='practice')))
         yield ('missing-public-observations', 'replay.json', dumps(
             {key: value for key, value in replay.items() if key != 'observations'}))
+        for seat in (0, 1):
+            bots = [dict(bot) for bot in manifest['bots']]
+            bots[seat]['commit'] = ' '
+            yield (f'invalid-commit-at-seat-{seat}', 'match.json', dumps(dict(manifest, bots=bots)))
         if ladder:
             return
 
@@ -159,8 +164,6 @@ class JudgeTests(MatchFixture):
         changed_owner = '0' if replay['init']['owner'][0] == '.' else '.'
         changed_init = dict(replay['init'], owner=changed_owner + replay['init']['owner'][1:])
         changed_frames = [dict(replay['frames'][0], score=score), *replay['frames'][1:]]
-        missing_commit = [dict(bot) for bot in manifest['bots']]
-        missing_commit[0].pop('commit')
         yield from (
             ('missing-manifest', 'match.json', None),
             ('missing-replay', 'replay.json', None),
@@ -173,5 +176,4 @@ class JudgeTests(MatchFixture):
             ('edited-frame-score', 'replay.json', dumps(dict(replay, frames=changed_frames))),
             ('edited-log-timing', 'log.jsonl', '\n'.join(map(dumps, [log[0], dict(log[1], us=timing), *log[2:]])) + '\n'),
             ('edited-log-score', 'log.jsonl', '\n'.join(map(dumps, [log[0], dict(log[1], score=score), *log[2:]])) + '\n'),
-            ('missing-commit', 'match.json', dumps(dict(manifest, bots=missing_commit))),
         )

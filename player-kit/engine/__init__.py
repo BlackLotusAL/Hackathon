@@ -1,3 +1,3 @@
-"""Rules and Bot orchestration for local preliminary matches."""
+"""Contest game rules, referee and replay tools."""
 
 VERSION = 'v1'

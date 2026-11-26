@@ -1,20 +1,19 @@
-"""Generate maps and verify replays with ``python -m engine``."""
+"""Run the engine command for the Contest or player-kit distribution."""
 import argparse
 import json
 from pathlib import Path
 import random
 
-from . import mapgen
+from .maps import draw, generate, load_map
 from .protocol import dumps, json_object
-from .replay import game_result
+from .replay import game_result, read_referee_log, verify_replay
 from .rules import RULESET
-from .verification import read_referee_log, verify_replay
 
 
 def generate_maps(args):
     seeds = ([args.seed + index for index in range(args.count)] if args.seed is not None
              else [random.randrange(1, 10 ** 6) for _ in range(args.count)])
-    maps = [mapgen.generate(seed, args.stage) for seed in seeds]
+    maps = [generate(seed, args.stage) for seed in seeds]
     if args.out:
         with args.out.open('w', encoding='utf-8') as output:
             json.dump(maps, output, ensure_ascii=False, indent=1)
@@ -25,7 +24,7 @@ def generate_maps(args):
         keys = sum(row.count('*') for row in board['terrain'])
         zones = '、'.join(f"{len(zone['cells'])} 格" for zone in board['boost_zones'])
         print(f"{board['id']}  缺陷 {defects} 格  关键图形区 {keys} 格  加速区 {zones}")
-        print(mapgen.draw(board) + '\n')
+        print(draw(board) + '\n')
 
 
 def verify_recording(args):
@@ -35,13 +34,17 @@ def verify_recording(args):
     board = None
     if args.map_file is not None:
         sealed = {'file': args.map_file.read_bytes().decode('utf-8'), 'sha256': args.map_sha256}
-        board, _ = mapgen.load_map(sealed, replay['stage'])
+        board, _ = load_map(sealed, replay['stage'])
     log = read_referee_log(args.log_file) if args.log_file is not None else None
     game = verify_replay(replay, board=board, log=log)
     print(dumps(game_result(game)))
 
 
 def main(argv=None):
+    if (Path(__file__).resolve().parents[1] / 'sdk' / 'submission.py').is_file():
+        from .match import main as match_main
+        return match_main(argv)
+
     parser = argparse.ArgumentParser(
         prog='python -m engine', description='曝光领地规则引擎工具',
         epilog='选手本地对战请在 player-kit/ 目录运行 python -m engine P1 P2 [--seed SEED]。',
@@ -53,7 +56,7 @@ def main(argv=None):
     maps.add_argument('--stage', default=RULESET, choices=(RULESET,))
     maps.add_argument('--out', type=Path, help='保存为 JSON 数组。不填则在终端绘制')
     maps.set_defaults(handler=generate_maps)
-    replay = commands.add_parser('verify-replay', help='独立复核正式回放')
+    replay = commands.add_parser('verify-replay', help='独立复核对局回放')
     replay.add_argument('replay', type=Path)
     replay.add_argument('--log-file', type=Path, help='裁判的 log.jsonl，可同时核对公开观测和日志')
     replay.add_argument('--map-file', type=Path, help='公开的封存地图原文件')
@@ -67,4 +70,4 @@ def main(argv=None):
 
 
 if __name__ == '__main__':
-    main()
+    raise SystemExit(main())

@@ -1,6 +1,5 @@
 """Contest HTTP endpoints, organizer access and service lifecycle."""
 from base64 import b64encode
-from concurrent.futures import ThreadPoolExecutor
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from ipaddress import ip_address
@@ -8,26 +7,27 @@ from pathlib import Path
 import hmac
 import re
 import socket
-from threading import Event, Thread
+from threading import Event
 from time import monotonic
-from urllib.parse import parse_qs, quote, unquote
+from urllib.parse import parse_qs, quote, unquote, urlsplit
+from uuid import uuid4
 
-from engine.protocol import RUN_ID, dumps, json_object
-from engine.verification import VerificationError
+from engine.game import Game
+from engine.maps import generate
+from engine.match import HttpBot
+from engine.protocol import RUN_ID, dumps, end_message, init_message, json_object, turn_message
+from engine.rules import PARAMS, TIME_LIMIT_STATES
 
-from .arena import RUN_QUERY_BATCH_SIZE, ArenaClient, ExecutionService, review_archive
+from .arena import ArenaClient, ContestWorker, ExecutionService
 from .config import IPWhitelist
-from .database import Database, DatabaseStopping
+from .database import Database
 from .domain import OFFICIAL_BATCH, PHASES, RULESET, ContestError
 from .duels import DuelService, Rulings, load_pools
 from .preliminary import Preliminary
-from .self_check import check_bot
 from .workbook import MAX_UPLOAD, MIME
 
 
-PRELIMINARY_POLL_INTERVAL = 10
-ARENA_SUBMIT_WORKERS = 12
-WORK_IDLE_INTERVAL = 0.25
+BOT_CHECK_TURNS = 60
 DUEL_QUERY = re.compile(r'/contest/v1/duels/([^/]+)/(status|result)')
 LOAD_TEST_RESOURCE = re.compile(r'/admin/load-tests/([^/]+)(?:/(retry|stop))?')
 MANUAL_DUEL_RESOURCE = re.compile(r'/admin/duels/([^/]+)')
@@ -48,98 +48,83 @@ class Contest:
         self.rulings = Rulings(self.database)
 
 
-class ContestWorker:
-    def __init__(self, contest, archive_root, arena):
-        self.contest, self.archive_root = contest, archive_root
-        self.arena = arena
+def _local_bot(target):
+    try:
+        url = urlsplit(target)
+        address = ip_address('127.0.0.1' if url.hostname == 'localhost' else url.hostname)
+        if not address.is_loopback or url.username is not None or url.port == 0:
+            raise ValueError()
+        bot = HttpBot(target)
+    except ValueError as error:
+        raise ContestError(400, 'INVALID_CHECK_TARGET', '请填写本机 Bot 的 HTTP(S) 根地址') from error
+    bot.host = str(address)
+    return bot
 
-    def submit_next(self):
-        request = self.contest.runs.claim()
-        if request is None:
-            return False
-        self._submit(request)
-        return True
 
-    def _submit(self, request):
-        status = self.arena.submit(request)
-        self.contest.runs.complete_submission(request['run_id'], status)
+def _http_detail(status, code):
+    return f'HTTP {code}' if code else {'timeout': '响应超时', 'connection': '连接失败'}.get(status, '响应无效')
 
-    def _submission_capacity(self):
-        status = self.arena.status() or {}
-        slots = status.get('slots')
-        idle = slots.get('idle') if isinstance(slots, dict) else None
-        if type(idle) is not int or idle < 0:
-            return 1  # Keep dispatching serially when slot status is unavailable.
-        queued = status.get('queue', 0)
-        if type(queued) is not int or queued < 0:
-            return min(1, idle)
-        return min(ARENA_SUBMIT_WORKERS, max(0, idle - queued))
 
-    def submit_available(self, stop):
-        runs = self.contest.runs
-        submitting = set()
-        with ThreadPoolExecutor(max_workers=ARENA_SUBMIT_WORKERS, thread_name_prefix='arena-submit') as executor:
-            while not stop.is_set():
-                completed = {future for future in submitting if future.done()}
-                for future in completed:
-                    future.result()
-                submitting.difference_update(completed)
+def _check_bot_turns(bot, run_id, game, record):
+    errors = 0
+    for turn in range(BOT_CHECK_TURNS):
+        command, status, _, elapsed_us = bot.turn(run_id, turn_message(game), PARAMS['turn_ms'] / 1000)
+        errors += status != 'ok'
+        if status in TIME_LIMIT_STATES:
+            elapsed_us = PARAMS['turn_ms'] * 1000
+        game.time_us[0] += elapsed_us
+        if turn == 0:
+            record('回合响应', 'ok' if status == 'ok' else 'fail', command or _http_detail(status, 0))
+        if errors and (turn == 0 or errors >= PARAMS['max_errors']):
+            game.forfeit(0, 'errors')
+            break
+        game.step((command, None))
 
-                if len(submitting) < ARENA_SUBMIT_WORKERS and runs.has_ready_submissions():
-                    # In-flight submissions may not be counted in Arena's snapshot yet.
-                    limit = self._submission_capacity() - len(submitting)
-                    if limit > 0 and not stop.is_set():
-                        submitting.update(executor.submit(self._submit, request)
-                                          for request in runs.claim_submissions(limit))
-                stop.wait(WORK_IDLE_INTERVAL)
+    mean_ms = game.time_us[0] / (turn + 1) / 1000
+    level = 'fail' if errors else 'warn' if mean_ms > PARAMS['turn_ms'] * 0.7 else 'ok'
+    record(f'试打 {BOT_CHECK_TURNS} 回合', level, f'{game.turn} 回合，错误 {errors} 次，平均 {mean_ms:.1f} 毫秒')
 
-    def poll_next(self):
-        claim = self.contest.runs.claim_poll()
-        if claim is None:
-            return False
-        self._poll_runs((claim,))
-        return True
 
-    def _poll_runs(self, claims):
-        status, payload = self.arena.query_runs([claim.run_id for claim in claims])
-        self.contest.runs.complete_polls(claims, status, payload)
+def check_bot(body):
+    """Exercise the current Bot HTTP protocol with an isolated practice session."""
+    rules, target = body.get('rules'), body.get('target')
+    if body.keys() != {'rules', 'target'} or rules != RULESET:
+        raise ContestError(400, 'INVALID_RULES', '请使用当前赛题规则（prelim）并填写 Bot 地址')
+    if not isinstance(target, str) or not target.strip():
+        raise ContestError(400, 'INVALID_CHECK_TARGET', '请填写 Bot 服务地址')
+    target = target.strip()
+    bot = _local_bot(target)
+    items = []
 
-    def poll_preliminary_round(self, stop=None):
-        targets = self.contest.runs.preliminary_poll_targets()
-        for offset in range(0, len(targets), RUN_QUERY_BATCH_SIZE):
-            if stop is not None and stop.is_set():
-                return
-            batch = targets[offset:offset + RUN_QUERY_BATCH_SIZE]
-            claims = self.contest.runs.claim_preliminary_polls(batch)
-            if claims:
-                self._poll_runs(claims)
+    def record(name, level, detail):
+        items.append({'name': name, 'level': level, 'detail': detail})
 
-    def poll_preliminary(self, stop):
-        next_round = monotonic()
-        while not stop.wait(max(0, next_round - monotonic())):
-            self.poll_preliminary_round(stop)
-            # Advance to the next scheduled tick, skipping ticks consumed by this round.
-            elapsed = monotonic() - next_round
-            intervals = int(elapsed // PRELIMINARY_POLL_INTERVAL) + 1
-            next_round += intervals * PRELIMINARY_POLL_INTERVAL
+    report = {'name': target, 'rules': rules, 'items': items}
+    started = monotonic()
+    ready, _ = bot.start(PARAMS['startup_s'])
+    if not ready:
+        record('启动就绪', 'fail', 'Bot 未返回就绪状态')
+        return report
+    record('启动就绪', 'ok', f'{monotonic() - started:.2f} 秒就绪')
 
-    def review_next(self):
-        pending = self.contest.runs.next_review()
-        if pending is None:
-            return False
-        request, arena_result, ladder = pending
-        run_id, state = request['run_id'], arena_result['state']
-        if state == 'platform_error':
-            self.contest.runs.complete_review(run_id, 'void', issue=arena_result['reason'])
-            return True
-        try:
-            manifest = review_archive(self.archive_root, request, state, ladder=ladder)
-        except VerificationError as error:
-            self.contest.runs.complete_review(run_id, 'held', issue=str(error))
-        else:
-            review = 'effective' if state == 'finished' else 'build_failed'
-            self.contest.runs.complete_review(run_id, review, manifest=manifest)
-        return True
+    run_id = f'run-{uuid4().int}.1'
+    game = Game(generate(42))
+    try:
+        status, code, _, _ = bot.post(run_id, 'init', init_message(game, 0), PARAMS['init_ms'] / 1000)
+        record('开局请求', 'ok' if status == 'ok' else 'fail', _http_detail(status, code))
+        if status == 'ok':
+            status, code, _, _ = bot.request(
+                'POST', f'/v1/matches/run-{uuid4().int}.1/turns/1', turn_message(game), 1,
+            )
+            record('未知对局', 'ok' if status == 'ok' and code == 404 else 'warn', _http_detail(status, code))
+            _check_bot_turns(bot, run_id, game, record)
+    finally:
+        if not game.done:
+            game.forfeit(0, 'stopped')
+        status, code, _, _ = bot.post(run_id, 'end', end_message(game), PARAMS['end_ms'] / 1000)
+        record('结束通知', 'ok' if status == 'ok' else 'warn', _http_detail(status, code))
+
+    return report
 
 
 class Admin:
@@ -374,17 +359,6 @@ def serve(settings):
              if settings.admin_user else None)
     worker = ContestWorker(contest, settings.archive_root, arena)
 
-    def work(step):
-        while not stop.is_set():
-            if not step():
-                stop.wait(WORK_IDLE_INTERVAL)
-
-    def run_worker(task, *args):
-        try:
-            task(*args)
-        except DatabaseStopping:
-            return
-
     handler = handler_for(contest, admin=admin, ip_whitelist=settings.ip_whitelist)
     bind_ip = ip_address(settings.host)
     server_type = IPv6HTTPServer if bind_ip.version == 6 else ThreadingHTTPServer
@@ -397,15 +371,5 @@ def serve(settings):
         listen_host = f'[{bind_ip}]' if bind_ip.version == 6 else str(bind_ip)
         print(f'Listening http://{listen_host}:{server.server_port}', flush=True)
         print(f'Arena {settings.arena_url}', flush=True)
-        steps = (worker.poll_next, worker.review_next)
-        workers = [Thread(target=run_worker, args=(work, step), daemon=True, name=step.__name__) for step in steps]
-        workers.extend(Thread(target=run_worker, args=(task, stop), daemon=True, name=task.__name__)
-                       for task in (worker.submit_available, worker.poll_preliminary))
-        for thread in workers:
-            thread.start()
-        try:
+        with worker.running(stop):
             server.serve_forever()
-        finally:
-            stop.set()
-            for thread in workers:
-                thread.join()

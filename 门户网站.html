@@ -263,26 +263,141 @@ main > .page:not(#home) { padding-bottom: 72px; }
 @media (max-width: 760px) { .score3 { grid-template-columns: minmax(0, 1fr); } }
 
 /* ---------- 题目 ---------- */
-.story { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 28px; align-items: start; }
-.story p { font-size: 17px; max-width: 34em; }
-.story p + p { margin-top: .65rem; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--line); background: var(--surface); padding: 6px 10px; font-size: 13px; }
-.chip i { width: 12px; height: 12px; display: inline-block; flex: none; }
+#problem {
+  scroll-margin-top: calc(var(--head) + 3px);
+  --problem-land: color-mix(in srgb, var(--t0) 19%, var(--surface));
+  --problem-claimed: color-mix(in srgb, var(--t0) 38%, var(--surface));
+  --problem-grid-line: color-mix(in srgb, var(--ink) 15%, transparent);
+}
+#problem .page-head p { max-width: 43em; font-size: 1.0625rem; }
+#problem .page-head .problem-lede { font-size: clamp(1.125rem, 2.1vw, 1.375rem); font-weight: 700; color: var(--ink); }
+.problem-lead { margin-bottom: 14px; max-width: 46em; font-size: 1rem; }
+.problem-frames { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.problem-frame, .problem-illustration { margin: 0; background: var(--surface); min-width: 0; }
+.problem-frame { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid var(--ink); }
+.problem-frame h3, .problem-turn h3, .problem-aside h3, .problem-score h3 { font-size: 1.0625rem; line-height: 1.4; }
+.problem-frame figcaption p { margin-top: 4px; color: var(--muted); }
+.problem-board {
+  --cols: 8;
+  --rows: 6;
+  display: grid;
+  grid-template: repeat(var(--rows), minmax(0, 1fr)) / repeat(var(--cols), minmax(0, 1fr));
+  aspect-ratio: var(--cols) / var(--rows);
+  position: relative;
+  isolation: isolate;
+  border: 1px solid var(--line);
+  background: var(--cell);
+}
+.problem-board::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background-image: linear-gradient(to right, var(--problem-grid-line) 1px, transparent 1px), linear-gradient(to bottom, var(--problem-grid-line) 1px, transparent 1px);
+  background-size: calc(100% / var(--cols)) calc(100% / var(--rows));
+}
+.problem-owned { background: var(--problem-land); }
+.problem-claimed { background: var(--problem-claimed); }
+.problem-base { position: relative; }
+.problem-base::before { content: ""; position: absolute; inset: 0; z-index: 2; box-shadow: inset 0 0 0 2px var(--t0); }
+.problem-trail { display: grid; place-items: center; position: relative; z-index: 2; }
+.problem-trail::before { content: ""; width: 32%; aspect-ratio: 1; border-radius: 50%; background: var(--t0); }
+.problem-beam, .problem-key {
+  position: relative;
+  z-index: 2;
+  align-self: center;
+  justify-self: center;
+  display: grid;
+  place-items: center;
+  aspect-ratio: 1;
+  font: 700 clamp(12px, 1.7vw, 20px) / 1 var(--mono);
+}
+.problem-beam { width: 68%; background: var(--t0); color: var(--surface); }
+.problem-beam.red { background: var(--t1); }
+.problem-key { width: 58%; background: var(--key); color: #15171a; }
+.problem-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 10px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: 14px; }
+.problem-legend li { display: flex; align-items: center; gap: 6px; }
+.problem-legend .problem-swatch { width: 18px; height: 18px; border: 1px solid var(--line); font-size: 12px; }
+.problem-swatch.problem-trail { background: var(--cell); }
+
+.problem-map { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin: 0; }
+.problem-map > div { padding: 12px; border: 1px solid var(--line); background: var(--surface); }
+.problem-map dt { display: flex; gap: 8px; align-items: center; font-weight: 700; }
+.problem-map dd { margin: 6px 0 0; color: var(--muted); }
+.problem-map-icon { flex: none; width: 25px; height: 25px; display: grid; place-items: center; border: 1px solid var(--line); font: 700 14px / 1 var(--mono); }
+.problem-map-icon.blank { background: var(--cell); }
+.problem-map-icon.key { background: var(--key); color: #15171a; }
+.problem-map-icon.defect { background: var(--defect); color: var(--surface); }
+.problem-map-icon.base {
+  border-color: var(--t0);
+  background: linear-gradient(to right, var(--t0) 1px, transparent 1px) 0 0 / 33.333% 100%,
+    linear-gradient(to bottom, var(--t0) 1px, transparent 1px) 0 0 / 100% 33.333%, var(--problem-land);
+}
+.problem-map-icon.boost, .problem-step-cell.boost { border: 2px solid var(--boost); background: color-mix(in srgb, var(--boost) 16%, var(--surface)); }
+
+.problem-turn { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 26px; margin: 0; padding: 0; list-style: none; }
+.problem-turn > li { position: relative; min-width: 0; padding: 14px; border: 1px solid var(--ink); background: var(--surface); }
+.problem-turn > li:not(:last-child)::after { content: "→"; position: absolute; top: 50%; right: -26px; width: 25px; transform: translateY(-50%); text-align: center; font: 700 19px / 1 var(--mono); }
+.problem-turn p { margin-top: 8px; color: var(--muted); }
+.problem-directions, .problem-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 8px; }
+.problem-directions kbd, .problem-step-cell { display: inline-grid; place-items: center; padding: 3px 6px; border: 1px solid var(--line); background: var(--cell); color: var(--ink); font: 700 13px / 1.5 var(--mono); }
+.problem-steps > b { flex: 0 0 5em; font-size: 14px; }
+.problem-steps .problem-step-cell { min-width: 22px; }
+
+.problem-figure-row { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); border: 1px solid var(--ink); background: var(--surface); }
+.problem-incident { margin-top: 16px; }
+.problem-illustration { align-self: start; display: grid; gap: 8px; padding: 14px; }
+.problem-illustration figcaption { color: var(--muted); font-size: 14px; }
+.problem-cut-board { --cols: 7; --rows: 3; }
+.problem-cut-target { box-shadow: inset 0 0 0 2px var(--t1); }
+.problem-aside, .problem-score { min-width: 0; padding: 14px 18px; border-left: 1px solid var(--line); }
+.problem-aside ul { margin: 8px 0; padding-left: 1.25em; }
+.problem-aside li + li { margin-top: 4px; }
+.problem-aside p { color: var(--muted); }
+.problem-score-board { --cols: 8; --rows: 5; }
+.problem-edges {
+  position: relative;
+  z-index: 2;
+  --horizontal-edge: linear-gradient(90deg, transparent 12%, var(--warn) 12% 88%, transparent 88%);
+  --vertical-edge: linear-gradient(transparent 12%, var(--warn) 12% 88%, transparent 88%);
+  background: var(--horizontal-edge) left top / 33.333% 3px repeat-x,
+    var(--horizontal-edge) left bottom / 33.333% 3px repeat-x,
+    var(--vertical-edge) right top / 3px 33.333% repeat-y;
+}
+.problem-score { display: grid; align-content: center; }
+.problem-score > p { margin-top: 6px; color: var(--muted); }
+.problem-score dl { margin: 12px 0 0; }
+.problem-score dl > div { display: flex; justify-content: space-between; align-items: baseline; gap: 4px 12px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--line); }
+.problem-score dd { margin: 0; font-weight: 700; }
+.problem-score .problem-total { font-weight: 700; border-color: var(--ink); }
+.problem-score .problem-total dd { box-shadow: inset 0 -.32em color-mix(in srgb, var(--accent) 60%, transparent); font-size: 1.25rem; }
+.problem-subhead { margin: 24px 0 10px; font-size: 1.125rem; }
+
 .problem-notes { margin-top: 12px; border: 1px solid var(--line); background: var(--surface); font-size: 1rem; }
 .problem-notes summary { padding: 10px 14px; font-weight: 700; cursor: pointer; }
-.problem-notes ul { margin: 0; padding: 10px 18px 12px 34px; border-top: 1px solid var(--line); }
-.problem-notes li + li { margin-top: 5px; }
-.rule-order { margin-bottom: 14px; color: var(--muted); font-size: 1rem; }
-@media (max-width: 860px) { .story { grid-template-columns: minmax(0, 1fr); } }
+.problem-notes-body { padding: 12px 14px; border-top: 1px solid var(--line); }
+.problem-notes-body ul { margin: 0; padding-left: 1.25em; }
+.problem-notes-body li + li, .problem-notes-body p + p { margin-top: 8px; }
+.problem-notes-body .tbl-wrap { margin-block: 10px; }
+.problem-notes > .demo, .problem-notes > .mini { border: 0; border-top: 1px solid var(--line); }
+.problem-notes > .mini { margin: 0; padding: 14px; }
+.problem-guide { margin-top: 16px; }
+@media (max-width: 860px) { .problem-map { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 690px) {
+  .problem-frames, .problem-turn, .problem-figure-row { grid-template-columns: minmax(0, 1fr); }
+  .problem-frame { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; }
+  .problem-turn > li:not(:last-child)::after { content: "↓"; top: auto; bottom: -24px; right: calc(50% - 12px); transform: none; }
+  .problem-aside, .problem-score { border-left: 0; border-top: 1px solid var(--line); }
+  .problem-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 360px) { .problem-frame, .problem-map > div { padding: 10px; } }
 
 .demo { display: grid; grid-template-columns: 260px minmax(0, 1fr); border: 1px solid var(--ink); background: var(--surface); }
 .rtabs { display: flex; flex-direction: column; border-right: 1px solid var(--ink); }
-.rtabs button { position: relative; text-align: left; font: inherit; font-size: 15px; padding: 13px 16px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; display: flex; gap: 10px; align-items: baseline; }
+.rtabs button { position: relative; text-align: left; font: inherit; font-size: 15px; padding: 13px 16px; border: 0; border-bottom: 1px solid var(--line); background: transparent; color: var(--ink); cursor: pointer; }
 .rtabs button:last-child { border-bottom: 0; }
-.rtabs button .no { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .rtabs button[aria-selected="true"] { background: var(--ink); color: var(--bg); font-weight: 700; }
-.rtabs button[aria-selected="true"] .no { color: var(--accent); }
 .rtabs .prog { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; background: var(--accent); transform: scaleX(0); transform-origin: left; }
 .stagebox { padding: 18px; display: grid; gap: 14px; min-width: 0; }
 .stagebox canvas { width: 100%; display: block; aspect-ratio: 15 / 9; }
@@ -290,7 +405,7 @@ main > .page:not(#home) { padding-bottom: 72px; }
 .stagebox .cap { flex: 1; min-width: 0; font-size: 14px; min-height: 2.6em; display: flex; align-items: center; }
 .stagebox .meta { font-family: var(--mono); font-size: 12px; color: var(--muted); white-space: nowrap; display: flex; gap: 12px; font-variant-numeric: tabular-nums; }
 .stagebox .meta i { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; }
-.stagebox .rule-txt { font-size: 1rem; color: var(--muted); max-width: 60em; min-height: 4.8em; }
+.stagebox .rule-txt { font-size: 1rem; color: var(--muted); max-width: 60em; }
 .stagebox .rule-txt b { color: var(--ink); }
 .iconbtn { width: 34px; height: 34px; flex: none; border: 1px solid var(--ink); background: var(--surface); color: var(--ink); cursor: pointer; display: grid; place-items: center; }
 .iconbtn:disabled { opacity: .35; cursor: default; }
@@ -302,8 +417,6 @@ main > .page:not(#home) { padding-bottom: 72px; }
   .rtabs button { flex: none; border-bottom: 0; border-right: 1px solid var(--line); padding: 10px 14px; font-size: 14px; white-space: nowrap; }
 }
 
-#problem { scroll-margin-top: calc(var(--head) + 3px); }
-#problem .rtabs { position: relative; }
 @media (max-width: 720px) {
   #problem .stagebox .bar { flex-wrap: wrap; gap: 8px 12px; }
   #problem .stagebox .cap { flex: 1 0 100%; order: 1; }
@@ -780,14 +893,14 @@ pre.cmd { margin: 0; font-family: var(--mono); font-size: 12px; background: var(
             </ul></details>
           <details><summary><b>提交与验证</b><span>规章 §3.4</span></summary>
             <ul>
-              <li>主办方为每队在 Codehub 建好仓库，推送到 <code>main</code> 分支的代码就是参赛代码，开发中的代码请放在其他分支。</li>
+              <li>主办方为每队在 Codehub 建好仓库，推送到 <code>master</code> 分支的代码就是参赛代码，开发中的代码请放在其他分支。</li>
               <li>Bot 用 Python 3.9 或 C++17 编写；Python 依赖写在 <code>requirements.txt</code>，只能用公司 PyPI 镜像里已有的包；C++ 在 <code>build.sh</code> 里编译、由 <code>start.sh</code> 启动。</li>
-              <li>每次发起对局时，平台读取本队 <code>main</code> 的最新提交：新提交当场构建，并与基准 L1 试打一局，既无超时也无程序退出才成为有效提交。</li>
-              <li>提交截止（初赛 11 月 18 日 22:00、决赛 11 月 27 日 22:00）时 <code>main</code> 上的提交为候选最终提交；它无效时以截止前最后一个有效提交参赛。</li>
+              <li>对决开始前，平台固定双方代码版本，并按同一提交规范构建队伍和基准 Bot。对局中的超时和程序退出由裁判按当局规则判定。</li>
+              <li>提交截止时，平台锁定各队 <code>master</code> 上的提交，作为正式对决的参赛版本。</li>
             </ul></details>
           <details><summary><b>天梯与挑战</b><span>规章 §5</span></summary>
             <ul>
-              <li>天梯用 Elo 分数，初始 1200；以同一张随机地图上互换座位的 2 局为一组计分，前 10 组为定位赛（K = 40），之后 K = 20。</li>
+              <li>天梯 Elo 初始分为 1200。同一张随机地图上互换座位的 2 局为一组，双方统一使用 K = 20 计分。队伍在首组结算后入榜。</li>
               <li>队伍任一成员可以发起匹配，平台从天梯分相近的队伍里选对手；队长可以挑战任一队伍或基准 Bot，可指定地图种子。</li>
               <li>每队同一时间只能有一组本队发起的对局在进行，结束后才能再发起；被别人挑战不受此限。</li>
               <li>天梯分不影响晋级、名次或任何参赛结果。天梯对局只对参赛双方开放回放。</li>
@@ -813,96 +926,238 @@ pre.cmd { margin: 0; font-family: var(--mono); font-size: 12px; background: var(
   <section class="page" id="problem" role="tabpanel" aria-labelledby="t-problem" hidden>
     <div class="wrap">
       <div class="page-head">
-        <h1 class="rv" style="--i:0">题目介绍<span class="dot" aria-hidden="true"></span></h1>
+        <h1>曝光领地怎么玩<span class="dot" aria-hidden="true"></span></h1>
+        <p class="problem-lede">双方各写一个程序（Bot），在同一张棋盘上圈地。正常打满 600 回合后比得分。</p>
+        <p>比赛的灵感来自光刻用的掩模版。把掩模基板想成一张方格纸，电子束落在上面的点就是你的棋子，规则里叫「束斑」。你的 Bot 每回合给束斑选一个移动方向。</p>
       </div>
 
-      <section class="block">
-        <div class="sec-title rv" style="--i:1"><span class="k">A</span><h2>背景与地图</h2></div>
-        <div class="story">
-          <div class="rv" style="--i:2">
-            <p>光刻机将掩模版上的电路图形缩小并投影到晶圆。多个项目可以共用一块掩模版基板，分摊制备成本。比赛模拟掩模版直写，双方各编写一个 Bot，控制电子束在同一基板上的落点，也就是束斑。</p>
-            <p>基板为 41×41 格，左上角为 (0, 0)，x 向右、y 向下。开局时双方获得完整地图，各自占有校准区并从中心出发。0 号方朝上，1 号方朝下，比分为 9∶9，全盘无轮廓。</p>
-          </div>
-          <div class="chips rv" style="--i:3" id="chips"></div>
+      <section class="block" aria-labelledby="problem-claim">
+        <div class="sec-title"><h2 id="problem-claim">怎么把格子圈成自己的领地</h2></div>
+        <p class="problem-lead">从自家领地走出去，沿途画线，再走回自家领地。路线接回领地时，围住的格子就归你，也能圈走对手已占的地。</p>
+        <div class="problem-frames">
+          <figure class="problem-frame">
+            <div class="problem-board" aria-hidden="true">
+              <span class="problem-owned problem-base" style="grid-area: 3 / 2 / 6 / 5"></span>
+              <span class="problem-trail" style="grid-area: 3 / 5"></span>
+              <span class="problem-beam" style="grid-area: 3 / 6">→</span>
+              <span class="problem-key" style="grid-area: 4 / 6">3</span>
+            </div>
+            <figcaption><h3>1. 走出领地</h3><p>蓝方离开浅蓝色领地，踩过的格子留下蓝点，这条线叫「轮廓」。</p></figcaption>
+          </figure>
+          <figure class="problem-frame">
+            <div class="problem-board" aria-hidden="true">
+              <span class="problem-owned problem-base" style="grid-area: 3 / 2 / 6 / 5"></span>
+              <span class="problem-trail" style="grid-area: 3 / 5"></span>
+              <span class="problem-trail" style="grid-area: 3 / 6"></span>
+              <span class="problem-trail" style="grid-area: 3 / 7"></span>
+              <span class="problem-trail" style="grid-area: 4 / 7"></span>
+              <span class="problem-trail" style="grid-area: 5 / 7"></span>
+              <span class="problem-trail" style="grid-area: 5 / 6"></span>
+              <span class="problem-beam" style="grid-area: 5 / 5">←</span>
+              <span class="problem-key" style="grid-area: 4 / 6">3</span>
+            </div>
+            <figcaption><h3>2. 绕出一条线</h3><p>蓝方绕过黄色的高分格。蓝点只是临时的线，接回领地才计分。</p></figcaption>
+          </figure>
+          <figure class="problem-frame">
+            <div class="problem-board" aria-hidden="true">
+              <span class="problem-owned problem-base" style="grid-area: 3 / 2 / 6 / 5"></span>
+              <span class="problem-claimed" style="grid-area: 3 / 5 / 6 / 8"></span>
+              <span class="problem-beam" style="grid-area: 5 / 4">←</span>
+              <span class="problem-key" style="grid-area: 4 / 6">3</span>
+            </div>
+            <figcaption><h3>3. 接回自家领地</h3><p>蓝方再向左走一格就闭合了。蓝点所在的格子和围住的格子一起归蓝方，这次共拿下 9 格。</p></figcaption>
+          </figure>
         </div>
-        <figure class="mini rv" style="--i:3">
-          <canvas id="mini" role="img" aria-label="缩小基板上的两个示例 Bot 对战动画"></canvas>
-          <figcaption><span>缩小棋盘演示</span><span class="who"><i style="background:var(--t0)"></i>0 号方 <b id="mini-s0">9</b></span><span class="who"><i style="background:var(--t1)"></i>1 号方 <b id="mini-s1">9</b></span><span id="mini-ev"></span><span class="t" id="mini-t">第 0 回合</span></figcaption>
-        </figure>
-        <details class="problem-notes rv" style="--i:4">
-          <summary>地图约束</summary>
-          <ul>
-            <li>空白格、缺陷格、关键图形区和两块互不重叠的校准区绕基板中心旋转 180° 对称。所有非缺陷格沿上下左右连通。</li>
-            <li>双方都可进入任一校准区。每方出生点周围 9×9 范围内的基板格均可通行，且无加速区标记点。</li>
-            <li>三个加速区各有一个区内标记点，标记点互不重合，每个到两个出生点的最短路程相等。以最近的等距可通行格为基准，各标记点的最短路程最多长 2 步。</li>
-          </ul>
+        <ul class="problem-legend" role="list" aria-label="圈地图例">
+          <li><span class="problem-swatch problem-owned" aria-hidden="true"></span>原有领地</li>
+          <li><span class="problem-swatch problem-trail" aria-hidden="true"></span>轮廓</li>
+          <li><span class="problem-swatch problem-beam" aria-hidden="true">→</span>束斑和朝向</li>
+          <li><span class="problem-swatch problem-claimed" aria-hidden="true"></span>新圈到的领地</li>
+        </ul>
+      </section>
+
+      <section class="block" aria-labelledby="problem-map">
+        <div class="sec-title"><h2 id="problem-map">先认清棋盘上的格子</h2></div>
+        <p class="problem-lead">正式棋盘有 <strong>41×41 格</strong>。开局时两边各占一块 3×3 的校准区，束斑从正中心出发，各有 <strong>9 分</strong>。</p>
+        <dl class="problem-map">
+          <div><dt><span class="problem-map-icon blank" aria-hidden="true">1</span>空白格</dt><dd>可以走，占下后每格值 1 分。</dd></div>
+          <div><dt><span class="problem-map-icon key" aria-hidden="true">3</span>关键图形区</dt><dd>黄色标出的高分格，可以走，占下后每格值 3 分。</dd></div>
+          <div><dt><span class="problem-map-icon defect" aria-hidden="true">×</span>基板缺陷</dt><dd>撞上就报废。这些格子始终无主。</dd></div>
+          <div><dt><span class="problem-map-icon base" aria-hidden="true"></span>校准区</dt><dd>双方都能进出。两块起点区始终各归自己。</dd></div>
+          <div><dt><span class="problem-map-icon boost" aria-hidden="true"></span>加速区</dt><dd>双方整局都能用。从紫框格起步可以加速，格子的分值照原地形算。</dd></div>
+        </dl>
+        <details class="problem-notes">
+          <summary>地图坐标与布局细节</summary>
+          <div class="problem-notes-body">
+            <ul>
+              <li>左上角是 (0, 0)，x 往右增大，y 往下增大。蓝方（0 号）开局朝上，红方（1 号）开局朝下。开局时只有各自的校准区有归属，也没有轮廓。</li>
+              <li>把棋盘旋转 180°，空白格、缺陷格和关键图形格的分布相同，两块不重叠的校准区也互相对应。能走的格子都能沿上下左右连通。</li>
+              <li>每个出生点周围 9×9 范围内，棋盘上的格子都能走，且没有加速区标记点。</li>
+              <li>三个加速区各有一个区内标记点，标记点彼此不同，到两个出生点的最短路程相等。与最近的等距可通行格相比，每个标记点最多远 2 步。</li>
+            </ul>
+          </div>
         </details>
       </section>
 
-      <section class="block">
-        <div class="sec-title rv" style="--i:4"><span class="k">B</span><h2>核心规则</h2></div>
-        <p class="rule-order rv" style="--i:5">每个移动步先判撞缺陷和出界，再判束斑碰撞。完成移动后先判扫过轮廓，再延伸或闭合。</p>
-        <div class="demo rv" style="--i:5">
-          <div class="rtabs" role="tablist" aria-label="核心规则" id="rtabs"></div>
-          <div class="stagebox" role="tabpanel" id="rpanel">
-            <canvas id="rcv" role="img"></canvas>
-            <div class="bar">
-              <div class="vcr" role="group" aria-label="演示控制">
-                <button class="iconbtn" type="button" id="rprev" aria-label="上一帧"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="2" height="10" fill="currentColor"/><path d="M11 1 4 6l7 5z" fill="currentColor"/></svg></button>
-                <button class="iconbtn" type="button" id="rplay"></button>
-                <button class="iconbtn" type="button" id="rnext" aria-label="下一帧"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 1l7 5-7 5z" fill="currentColor"/><rect x="9" y="1" width="2" height="10" fill="currentColor"/></svg></button>
-              </div>
-              <div class="cap" id="rcap" aria-live="polite"></div>
-              <div class="meta" id="rmeta"></div>
+      <section class="block" aria-labelledby="problem-move">
+        <div class="sec-title"><h2 id="problem-move">一回合怎么走</h2></div>
+        <p class="problem-lead">每回合两边的 Bot 都看到同一份完整局面，各自有 <strong>200 毫秒</strong>回复一个方向。只要束斑在场，就必须尝试移动。</p>
+        <ol class="problem-turn" role="list">
+          <li>
+            <h3>选方向</h3>
+            <div class="problem-directions"><kbd>U 上</kbd><kbd>D 下</kbd><kbd>L 左</kbd><kbd>R 右</kbd></div>
+            <p>回复超时、无效，或给出了反方向，束斑就沿原方向走。</p>
+          </li>
+          <li>
+            <h3>看起步格，决定走几格</h3>
+            <div class="problem-steps"><b>区外起步</b><span class="problem-step-cell" aria-hidden="true">起</span><span aria-hidden="true">→</span><span class="problem-step-cell">1 格</span></div>
+            <div class="problem-steps"><b>加速区起步</b><span class="problem-step-cell boost" aria-hidden="true">起</span><span aria-hidden="true">→</span><span class="problem-step-cell">第 1 格</span><span aria-hidden="true">→</span><span class="problem-step-cell">第 2 格</span></div>
+            <p>中途进出加速区，当回合的步数照起步时定好的走。</p>
+          </li>
+          <li>
+            <h3>一格一格结算</h3>
+            <p>裁判先查目标格和碰撞。成功走过去后，再查有没有踩到轮廓，最后才留线或圈地。</p>
+            <p>加速时两格都沿同一方向走。第一步报废，就走不到第二步。</p>
+          </li>
+        </ol>
+
+        <div class="problem-figure-row problem-incident">
+          <figure class="problem-illustration">
+            <div class="problem-board problem-cut-board" aria-hidden="true">
+              <span class="problem-trail" style="grid-area: 2 / 2"></span>
+              <span class="problem-trail" style="grid-area: 2 / 3"></span>
+              <span class="problem-trail problem-cut-target" style="grid-area: 2 / 4"></span>
+              <span class="problem-trail" style="grid-area: 2 / 5"></span>
+              <span class="problem-beam" style="grid-area: 2 / 6">→</span>
+              <span class="problem-beam red" style="grid-area: 1 / 4">↓</span>
             </div>
-            <p class="rule-txt" id="rtxt"></p>
+            <figcaption>红方下一步踩到蓝点，蓝方的束斑报废。</figcaption>
+          </figure>
+          <div class="problem-aside">
+            <h3>哪些情况会报废</h3>
+            <ul>
+              <li><strong>踩到轮廓。</strong> 踩到谁的轮廓，谁就报废。踩到自己的也算。</li>
+              <li><strong>撞到缺陷或出界。</strong> 束斑自己报废。</li>
+              <li><strong>束斑相撞。</strong> 双方同一步要进同一格，或准备互换位置，目标格在自家领地外的一方报废。</li>
+            </ul>
+            <p>报废会清掉该方的轮廓，已圈好的领地照常保留。之后停机 5 回合，第 5 个停机回合末从出生点重启。停机期间 Bot 也要回复。</p>
           </div>
         </div>
+        <details class="problem-notes">
+          <summary>裁判怎样处理碰撞、同时圈地和重启</summary>
+          <div class="problem-notes-body">
+            <ul>
+              <li>裁判先查缺陷和出界，再检查仍要走的束斑之间的碰撞。如果对手本回合已走完，你的束斑可以进入它停留的格子，照常检查轮廓。</li>
+              <li>双方先移动，再按这一步开始前的轮廓判定谁踩到了谁的线。双方踩线的结果同时生效。报废的束斑停止当回合剩下的移动、留线和闭合，回合结束时离场并清掉轮廓。</li>
+              <li>一方带着轮廓回到自家领地时，裁判把这方的领地和轮廓当作墙，从棋盘外沿上下左右往里找。这方的轮廓格和外面找不到的格子都算候选，先剔除已归己方的格子、缺陷格和对方校准区。</li>
+              <li>双方同时闭合时，从同一局面算候选格。只被一方圈到的格子归该方，两方都圈到就保留原归属。格子的归属和轮廓可以共存，先保留新占格上的轮廓，再清掉完成闭合方自己的全部轮廓。</li>
+              <li>报废后的下一回合是第 1 个停机回合。重启时朝向和开局一样，落到出生点也会扫过对方轮廓。处理完重启带来的报废后，裁判给仍在场且站在自家领地外的束斑补上当前位置的轮廓。</li>
+              <li>按时、格式正确的反向命令仍算有效回复。停机期间的回复只用来记耗时和错误。</li>
+            </ul>
+          </div>
+        </details>
       </section>
 
-      <section class="block">
-        <div class="sec-title rv" style="--i:6"><span class="k">C</span><h2>胜负判定</h2></div>
-        <div class="verdict-grid rv" style="--i:7">
+      <section class="block" aria-labelledby="problem-points">
+        <div class="sec-title"><h2 id="problem-points">圈完地怎么算分</h2></div>
+        <p class="problem-lead">把自己领地里每格的分值加起来，再扣掉露边的成本。每回合结束都重算一次。</p>
+        <div class="problem-figure-row">
+          <figure class="problem-illustration">
+            <div class="problem-board problem-score-board" aria-hidden="true">
+              <span class="problem-owned problem-base" style="grid-area: 2 / 2 / 5 / 5"></span>
+              <span class="problem-claimed" style="grid-area: 2 / 5 / 5 / 8"></span>
+              <span class="problem-key" style="grid-area: 3 / 6">3</span>
+              <span class="problem-edges" style="grid-area: 2 / 5 / 5 / 8"></span>
+            </div>
+            <figcaption>还是刚才圈到的 9 格。红线标出的 9 条露边分布在上、下、右三侧，每侧 3 条。左侧连着自己的校准区。</figcaption>
+          </figure>
+          <div class="problem-score">
+            <h3>每凑满 3 条露边，扣 1 分</h3>
+            <p>只检查自己校准区外的己方领地。格子的某条边挨着无主格、对手领地、缺陷或棋盘外，就算一条露边。</p>
+            <dl>
+              <div><dt>校准区 9 分，外加 8 个空白格和 1 个高分格</dt><dd class="mono">9 + 8 × 1 + 1 × 3 = 20</dd></div>
+              <div><dt>9 条露边扣 3 分</dt><dd class="mono">9 ÷ 3 = 3</dd></div>
+              <div class="problem-total"><dt>蓝方当前得分</dt><dd class="mono">20 − 3 = 17 分</dd></div>
+            </dl>
+          </div>
+        </div>
+
+        <h3 class="problem-subhead">怎么分胜负</h3>
+        <div class="verdict-grid">
           <section class="verdict-card" aria-labelledby="problem-single">
-            <h3 id="problem-single">单局</h3>
-            <p>结算完第 <strong>600 回合</strong>后依次比较三项指标，前一项相同才比较下一项。</p>
-            <ol class="verdict">
-              <li><span class="n" aria-hidden="true">1</span><div><b>终局得分高者胜</b><span class="r">图形区总面值减去周长成本，未闭合的轮廓不计分。</span></div></li>
-              <li><span class="n" aria-hidden="true">2</span><div><b>领先回合数多者胜</b><span class="r">统计回合结束时得分高于对手的次数。</span></div></li>
-              <li><span class="n" aria-hidden="true">3</span><div><b>累计响应时间少者胜</b><span class="r">以微秒累计已发出的各回合请求耗时。</span></div></li>
+            <h3 id="problem-single">一局怎么赢</h3>
+            <p>打满 <strong>600 回合</strong>后按下面的顺序比，前一项打平才看下一项。</p>
+            <ol class="verdict" role="list">
+              <li><span class="n" aria-hidden="true">1</span><div><b>最后一回合结束时，分高的赢</b></div></li>
+              <li><span class="n" aria-hidden="true">2</span><div><b>领先回合更多的一方赢</b><span class="r">只看每回合结束时谁领先。</span></div></li>
+              <li><span class="n" aria-hidden="true">3</span><div><b>累计回复用时更短的一方赢</b></div></li>
             </ol>
-            <p>三项全同，由主办方裁定胜方。有胜方的单局，胜方记 1 胜，负方记 1 负。</p>
-            <p><strong>技术判负</strong> 仅一方触发时，对手获胜。双方在开局阶段或同一回合触发时，本局双败，双方各记 1 负，胜方留空。</p>
+            <p>三项都一样时，由主办方裁定。胜方记 1 胜，负方记 1 负。</p>
           </section>
           <section class="verdict-card" aria-labelledby="problem-duel">
-            <h3 id="problem-duel">整场对决</h3>
-            <p><strong>初赛单循环</strong>中队伍两两对决一次。每场按固定地图池顺序在 3 张地图各打 2 局，共 6 局，每张地图第 2 局互换出生点。<strong>初赛天梯</strong>在同一张随机地图打 2 局，第 2 局换边。同场各局可并行，赛果按预定局序登记。</p>
-            <ol class="verdict">
-              <li><span class="n" aria-hidden="true">1</span><div><b>胜局数多者胜</b><span class="r">双方构建成功且全部预定局结果生效后，比较双方胜局数。</span></div></li>
-              <li><span class="n" aria-hidden="true">2</span><div><b>胜局数相同，比较三项总和</b><span class="r">全部预定局均为双败时，整场双败。其余情况只汇总正常结束的单局，依次比较终局得分总和（高者胜）、领先回合数总和（多者胜）、累计响应时间总和（少者胜）。</span></div></li>
-            </ol>
-            <p>胜局数相同且至少一局有胜方时，若没有可汇总的局或三项总和全同，由主办方裁定整场胜方，已登记局数照计。整场双败时，胜方留空。</p>
-            <p><strong>构建失败</strong> 一方因自身提交构建失败，整场判负，对手获胜，按预定局数记胜负。双方均因自身提交构建失败，整场双败，双方按预定局数记负。</p>
-            <p><strong>初赛排名</strong> 按单循环登记胜局数降序、负局数升序排列。排名最高的 16 支具备资格的队伍晋级。</p>
+            <h3 id="problem-duel">一场怎么赢</h3>
+            <p><strong>初赛正式对决</strong>中，每对队伍交手一场，在 3 张固定地图上各打 2 局，共 6 局。<strong>天梯练习</strong>每场用 1 张随机地图，打 2 局。每张图第 2 局都互换出生点。</p>
+            <p>整场先比赢了几局。<strong>初赛排名</strong>看正式对决累计赢了几局，胜局一样就比谁输得少，再比队伍编号（小的在前）。排名最高的 16 支符合资格的队伍晋级。</p>
           </section>
         </div>
-        <section class="verdict-card rv" style="--i:8" aria-labelledby="problem-timing">
-          <h3 id="problem-timing">响应时限与技术判负</h3>
-          <p>各项时限均包含平台测得的请求往返时间。</p>
-          <div class="tbl-wrap">
-            <table class="tbl">
-              <thead><tr><th scope="col">阶段</th><th scope="col">时限</th><th scope="col">未达要求时的处理</th></tr></thead>
-              <tbody>
-                <tr><td>程序就绪</td><td>启动后 10 秒</td><td>未就绪触发技术判负</td></tr>
-                <tr><td>开局通知</td><td>2 秒</td><td>超时或失败记 1 次错误</td></tr>
-                <tr><td>回合回复</td><td>200 毫秒</td><td>超时、格式无效或连接失败记 1 次错误</td></tr>
-                <tr><td>结束通知</td><td>1 秒</td><td>超时或失败时照常结算</td></tr>
-              </tbody>
-            </table>
+        <details class="problem-notes">
+          <summary>整场胜局数打平、构建失败怎么算</summary>
+          <div class="problem-notes-body">
+            <p>双方 Bot 构建成功时，正式对决按固定地图顺序安排各局。同场各局可以同时打，结果按原定顺序登记。所有预定局结算后，胜局多的一方赢。</p>
+            <p>胜局数相同，只合计正常结束的局，还是按单局那三项的顺序比总和。每一局都是双败时，整场双败，胜方留空。其余情况若没有正常结束的局，或三项总和都一样，由主办方裁定整场胜方，已经登记的胜负局照算。</p>
+            <p>只有一方因自身提交构建失败时，该方整场判负，对手获胜。整场原定打几局，就给双方分别记几局负和胜。双方都因自身提交构建失败时，整场双败，双方各按原定局数记负。</p>
           </div>
-          <p>本局累计达到 10 次错误，或程序在开局或回合阶段退出（包括因内存超限被终止），即触发技术判负。裁判在开局阶段结束时，或收齐双方当回合响应结果后统一判定。双方均未触发技术判负时才结算该回合。触发时立即结束本局，采用最近一个已结算回合的得分和领先回合数。若尚无已结算回合，采用开局得分，领先回合数记 0。</p>
-          <p><strong>累计响应时间</strong> 把已发出的回合请求耗时计入总和，包括因技术判负而未结算的回合。按时收到完整回复时计实际耗时，格式无效的完整回复也按此计时。超时、连接被拒或中断时按回合时限计。</p>
-        </section>
+        </details>
+        <details class="problem-notes">
+          <summary>每回合 200 毫秒与技术判负</summary>
+          <div class="problem-notes-body">
+            <p>回合回复从平台发出请求开始计时，到收到完整回复为止。</p>
+            <div class="tbl-wrap">
+              <table class="tbl">
+                <thead><tr><th scope="col">阶段</th><th scope="col">时限</th><th scope="col">超时或失败怎么办</th></tr></thead>
+                <tbody>
+                  <tr><td>程序就绪</td><td>启动后 10 秒</td><td>到时还没就绪，技术判负</td></tr>
+                  <tr><td>回合回复</td><td>200 毫秒</td><td>超时、格式无效或连接失败，记 1 次错误</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p>本局累计 10 次错误，或 Bot 在开局或回合阶段退出（包括内存超限被终止），也会技术判负。裁判在开局结束时，或收齐当回合双方的响应结果后一起判定。双方都通过才结算这一回合。</p>
+            <p>只有一方技术判负时，本局立即结束，对手获胜。双方在开局阶段或同一回合触发就是双败，各记 1 负，胜方留空。得分和领先回合数取上一次结算时的值，一回合都没结算过就取开局 9 分、领先 0 回合。</p>
+            <p>累计响应时间按微秒加总所有已发出的回合请求，包括因技术判负而未结算的回合。按时收到完整回复就记实际耗时，格式错了也一样。超时、连接被拒或中断时记 200 毫秒。</p>
+          </div>
+        </details>
+      </section>
+
+      <section class="block" aria-labelledby="problem-practice">
+        <div class="sec-title"><h2 id="problem-practice">跑一局试试</h2></div>
+        <p class="problem-lead">从参赛指南下载选手材料包，选一个 Bot 模板，在本地先跑一局，看看它怎样走和得分。</p>
+        <details class="problem-notes" id="rule-examples">
+          <summary>逐步看规则动画</summary>
+          <div class="demo">
+            <div class="rtabs" role="tablist" aria-label="选择一条规则" id="rtabs"></div>
+            <div class="stagebox" role="tabpanel" id="rpanel">
+              <canvas id="rcv" role="img"></canvas>
+              <div class="bar">
+                <div class="vcr" role="group" aria-label="演示控制">
+                  <button class="iconbtn" type="button" id="rprev" aria-label="上一步"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><rect x="1" y="1" width="2" height="10" fill="currentColor"/><path d="M11 1 4 6l7 5z" fill="currentColor"/></svg></button>
+                  <button class="iconbtn" type="button" id="rplay"></button>
+                  <button class="iconbtn" type="button" id="rnext" aria-label="下一步"><svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="M1 1l7 5-7 5z" fill="currentColor"/><rect x="9" y="1" width="2" height="10" fill="currentColor"/></svg></button>
+                </div>
+                <div class="cap" id="rcap" aria-live="polite"></div>
+                <div class="meta" id="rmeta"></div>
+              </div>
+              <p class="rule-txt" id="rtxt"></p>
+            </div>
+          </div>
+        </details>
+        <details class="problem-notes" id="mini-example">
+          <summary>看一场缩小棋盘对战</summary>
+          <figure class="mini">
+            <canvas id="mini" role="img" aria-label="缩小棋盘上的两个 Bot 对战动画"></canvas>
+            <figcaption><span class="who"><i style="background:var(--t0)"></i>蓝方 <b id="mini-s0">9</b></span><span class="who"><i style="background:var(--t1)"></i>红方 <b id="mini-s1">9</b></span><span id="mini-ev"></span><span class="t" id="mini-t">第 0 回合</span></figcaption>
+          </figure>
+        </details>
+        <button class="btn pri problem-guide" type="button" data-go="participation-guide">前往参赛指南</button>
       </section>
     </div>
   </section>
@@ -1093,7 +1348,7 @@ git push</code></pre>
         <h3 id="cd-h">发起挑战</h3>
         <p class="dlg-who" id="cd-who"></p>
         <label class="field"><span>地图种子（可选）</span><input type="number" id="cd-seed" min="1" max="999999" inputmode="numeric" placeholder="留空则随机生成地图"></label>
-        <p class="note">一组 2 局，同一张地图上互换座位，结果按 §5.3 计入双方天梯分。本队 main 有新提交时会先构建并试打。</p>
+        <p class="note">一组 2 局，同一张地图上互换座位。平台按同一规范构建双方的固定版本，结果按 §5.3 计入双方天梯分。</p>
         <div class="dlg-act"><button class="btn" value="cancel" type="submit">取消</button><button class="btn pri" value="ok" type="submit" id="cd-ok">挑战</button></div>
       </form>
     </dialog>
@@ -1133,7 +1388,7 @@ git push</code></pre>
     <div class="wrap">
       <div class="page-head">
         <h1 class="rv" style="--i:0">对局<span class="dot" aria-hidden="true"></span></h1>
-        <p class="rv" style="--i:1">本队参加的每一局都在这里：天梯匹配与挑战、提交时的试打，以及公示后的单循环和决赛。选中一局即可逐回合复盘。</p>
+        <p class="rv" style="--i:1">在这里查看本队的天梯对局，以及公示后的单循环和决赛。选中一局即可逐回合复盘。</p>
       </div>
       <section class="block">
         <div class="sec-title rv" style="--i:2"><span class="k">A</span><h2>对局记录</h2></div>
@@ -1142,7 +1397,6 @@ git push</code></pre>
             <button type="button" aria-pressed="true" data-kind="">全部</button>
             <button type="button" aria-pressed="false" data-kind="ladder">匹配</button>
             <button type="button" aria-pressed="false" data-kind="challenge">挑战</button>
-            <button type="button" aria-pressed="false" data-kind="smoke">试打</button>
             <button type="button" aria-pressed="false" data-kind="rr">单循环</button>
             <button type="button" aria-pressed="false" data-kind="final">决赛</button>
           </div>
@@ -2114,8 +2368,22 @@ git push</code></pre>
 
   var RULES = [
     {
+      title: '回来圈地',
+      text: '离开自家领地会留下轮廓。<b>带着轮廓走回自家领地</b>，才会拿到围住的格子。',
+      calib: [[3, 7], [11, 3]], keys: [[5, 5], [6, 5], [5, 4], [6, 4]],
+      p0: repeat('U', 4).concat(repeat('R', 5), repeat('D', 4), repeat('L', 4)), p1: idle(17),
+      captions: { 0: '蓝方从左下方出发，准备围住黄色高分格。', 2: '蓝方离开自家领地，沿路留下蓝色轮廓。', 10: '蓝方还没回到家，蓝色轮廓随时可能被踩到。' }
+    },
+    {
+      title: '每回合必须移动',
+      text: 'Bot 每回合交一个方向。<b>格式正确但要求掉头的回复</b>仍然算有效，束斑会按原方向走。超时也沿原方向走。',
+      calib: [[3, 4], [11, 4]], p0: ['R', 'R', 'R', 'L', null, 'U', 'L', 'L', 'L', 'L'], p1: idle(10),
+      captions: ['开局时蓝方朝上，红方朝下。', '命令 R，蓝方向右。', '蓝方离开图形区，留下轮廓。', '蓝方继续向右。', '反向命令 L 计为有效回复，蓝方沿原方向前进。', '回复超时，蓝方沿当前方向前进。', '命令 U，蓝方向上。', '命令 L，蓝方向左返回图形区。'],
+      showCommand: true
+    },
+    {
       title: '加速区',
-      text: '地图给出三个加速区各自覆盖的可通行格和标记点，双方整局均可使用。<b>从任一加速区内起步，沿选定方向连续尝试走 2 格</b>。从区外起步，只尝试走 1 格。步数在回合开始时按起步格确定，每一步单独结算，报废后停止本回合剩余移动。',
+      text: '只看回合从哪格起步。<b>从紫色格出发就沿同一方向尝试走两格</b>，中间走出加速区也一样。两步分别结算。',
       calib: [[2, 6], [12, 2]],
       boostZones: [
         { marker: [6, 5], cells: [[5, 5], [6, 4], [6, 5], [6, 6], [7, 5]] },
@@ -2130,39 +2398,15 @@ git push</code></pre>
       captions: ['紫色格是加速区，蓝方位于区外。', '从区外起步，蓝方走 1 格进入加速区。', '从加速区内起步，蓝方向右连走 2 格。', '蓝方从加速区内起步，离开该区时仍走完 2 格。', '蓝方从另一处加速区内起步，再向右连走 2 格。']
     },
     {
-      title: '周长成本',
-      text: '<b>得分 = 己方图形区各格面值之和 − ⌊己方露边总数 ÷ 3⌋</b>。逐格检查本方校准区外的己方图形区。边的另一侧为基板外、缺陷格、无主格或对方所属格时，计 1 条露边。每回合结算后重算。演示只统计与校准区分开的普通地块。',
-      calib: [[2, 2], [17, 9]],
-      shapes: [
-        { label: '1×16 长条', x: 2, y: 5, w: 16, h: 1 },
-        { label: '2×8 长方形', x: 6, y: 5, w: 8, h: 2 },
-        { label: '4×4 方块', x: 8, y: 4, w: 4, h: 4 }
-      ]
-    },
-    {
-      title: '每回合必须移动',
-      text: '双方根据同一份完整局面信息回复一个字符 <b>U / D / L / R</b>，对应上、下、左、右。在场束斑每回合必须尝试移动。按时收到格式正确且非反向的命令时采用指定方向，其余情况沿用当前方向。按时且格式正确的反向命令算有效回复。停机校准期间照常请求命令，回复只用于计时和错误判定。',
-      calib: [[3, 4], [11, 4]], p0: ['R', 'R', 'R', 'L', null, 'U', 'L', 'L', 'L', 'L'], p1: idle(10),
-      captions: ['开局时蓝方朝上，红方朝下。', '命令 R，蓝方向右。', '蓝方离开图形区，留下轮廓。', '蓝方继续向右。', '反向命令 L 计为有效回复，蓝方沿原方向前进。', '回复超时，蓝方沿当前方向前进。', '命令 U，蓝方向上。', '命令 L，蓝方向左返回图形区。'],
-      showCommand: true
-    },
-    {
-      title: '延伸与闭合',
-      text: '归属与轮廓分开记录。束斑在己方图形区外延伸轮廓，带着轮廓返回己方图形区时闭合。延伸完成后，从基板外侧沿上下左右相邻格扩散，己方图形区和轮廓阻断扩散。己方轮廓格和扩散不到的格列为候选，剔除己方已占格、缺陷格和对方校准区。各方按同一局面计算候选，单方候选划归该方，共同候选保留原归属。新占格保留原有轮廓，随后清除完成闭合各方的全部己方轮廓。',
-      calib: [[3, 7], [11, 3]], keys: [[5, 5], [6, 5], [5, 4], [6, 4]],
-      p0: repeat('U', 4).concat(repeat('R', 5), repeat('D', 4), repeat('L', 4)), p1: idle(17),
-      captions: { 0: '黄色方块是关键图形区，每格面值 3。', 2: '蓝方离开图形区，开始留下轮廓。', 10: '闭合前，蓝方的轮廓仍暴露在外。' }
-    },
-    {
       title: '扫过轮廓与重启',
-      text: '束斑移入有轮廓的格时，以该移动步开始时的轮廓为准，轮廓所属方报废，包括扫过自身轮廓的情况。双方扫过的结果同时生效。报废方停止本回合剩余的移动、延伸与闭合，回合末离场并清除全部己方轮廓。报废后的下一回合为第 1 个停机回合。第 5 个停机回合末在出生点按开局方向重启，扫过对方轮廓也会使对方报废。随后为仍在场且位于己方图形区外的束斑补标轮廓。',
+      text: '<b>踩到谁的轮廓，谁就报废。</b>轮廓被清掉，停机 5 回合后从出生点重启。',
       calib: [[3, 7], [11, 7]], p0: repeat('U', 4).concat(repeat('R', 5), repeat(null, 5), idle(3)),
       p1: repeat('L', 5).concat(repeat('U', 4), repeat('R', 4), repeat('D', 3), 'D'),
       captions: { 0: '双方即将离开图形区。', 6: '红方从下方接近蓝方的轮廓。', 8: '下一步，红方将扫过蓝方的轮廓。' }
     },
     {
       title: '束斑碰撞',
-      text: '同一移动步中，双方都待移动且未被标记报废时，若目标格相同或互换位置，判定碰撞。目标格在己方图形区外的一方报废。对手已走完本回合步数而停留时，束斑可进入该格，照常判定是否扫过轮廓。',
+      text: '双方同一步要进同一格，或准备互换位置，就算碰撞。<b>目标格在自家领地外的一方报废。</b>',
       calib: [[3, 4], [12, 4]],
       setup: function (g) {
         Object.assign(g.p[1], { x: 9, y: 4, dir: 'L' });
@@ -2174,10 +2418,20 @@ git push</code></pre>
     },
     {
       title: '缺陷与边界',
-      text: '束斑的目标格为缺陷格或位于基板外时，标记该方报废。缺陷格始终无主、不可进入。校准区由 3×3 空白格组成，双方均可进入，永久归其所属一方。',
+      text: '往深色的缺陷格走，或走出棋盘，束斑都会报废。',
       calib: [[3, 7], [11, 3]], defects: [[7, 3], [7, 4], [7, 5], [8, 5], [10, 8], [11, 8], [2, 2]], keys: [[9, 3], [9, 4]],
       p0: repeat('U', 3).concat(repeat('R', 4), repeat(null, 5)), p1: idle(12),
       captions: { 0: '深色格是基板缺陷。', 3: '蓝方准备向右，前方有基板缺陷。' }
+    },
+    {
+      title: '周长成本',
+      text: '这几块地各有 16 个空白格。<b>每凑满 3 条露边扣 1 分。</b>数数哪块地的露边最少。',
+      calib: [[2, 2], [17, 9]],
+      shapes: [
+        { label: '1×16 长条', x: 2, y: 5, w: 16, h: 1 },
+        { label: '2×8 长方形', x: 6, y: 5, w: 8, h: 2 },
+        { label: '4×4 方块', x: 8, y: 4, w: 4, h: 4 }
+      ]
     }
   ];
 
@@ -2185,7 +2439,7 @@ git push</code></pre>
     var tabs = document.getElementById('rtabs'), panel = document.getElementById('rpanel'), canvas = document.getElementById('rcv');
     var caption = document.getElementById('rcap'), meta = document.getElementById('rmeta'), text = document.getElementById('rtxt');
     var play = document.getElementById('rplay'), prev = document.getElementById('rprev'), next = document.getElementById('rnext');
-    var selected = 0, game, frame = 0, end = 0, message = '', timer = 0, playing = !reduce, active = false, auto = !reduce;
+    var selected = 0, game, frame = 0, end = 0, message = '', timer = 0, playing = false, active = false;
     var progress = [];
 
     RULES.forEach(function (rule, i) {
@@ -2194,10 +2448,9 @@ git push</code></pre>
       button.id = 'rt-' + i;
       button.setAttribute('role', 'tab');
       button.setAttribute('aria-controls', panel.id);
-      button.appendChild(el('span', 'no', String(i + 1)));
       button.appendChild(document.createTextNode(rule.title));
       button.appendChild(progress[i] = el('span', 'prog'));
-      button.addEventListener('click', function () { auto = false; select(i); });
+      button.addEventListener('click', function () { select(i); });
       button.addEventListener('keydown', function (event) {
         var index;
         switch (event.key) {
@@ -2208,7 +2461,6 @@ git push</code></pre>
           default: return;
         }
         index = (index + RULES.length) % RULES.length;
-        auto = false;
         select(index);
         tabs.children[index].focus();
         event.preventDefault();
@@ -2230,6 +2482,7 @@ git push</code></pre>
     }
 
     function select(index) {
+      setPlaying(false);
       selected = index;
       Array.prototype.forEach.call(tabs.children, function (button, i) {
         button.setAttribute('aria-selected', String(i === index));
@@ -2243,7 +2496,6 @@ git push</code></pre>
       if (tabs.scrollWidth > tabs.clientWidth) tabs.scrollLeft = tabs.children[index].offsetLeft - 16;
       reset();
       draw();
-      schedule();
     }
 
     function step() {
@@ -2302,12 +2554,11 @@ git push</code></pre>
       clearTimeout(timer);
       if (!playing || !active) return;
       timer = setTimeout(function () {
-        if (frame === end && auto) { select((selected + 1) % RULES.length); return; }
-        if (frame === end) reset();
-        else step();
+        step();
         draw();
-        schedule();
-      }, frame === end ? 2800 : RULES[selected].shapes ? 2400 : frame === 0 ? 1100 : 720);
+        if (frame === end) setPlaying(false);
+        else schedule();
+      }, RULES[selected].shapes ? 2400 : frame === 0 ? 1100 : 720);
     }
 
     function updatePlay() {
@@ -2317,7 +2568,6 @@ git push</code></pre>
 
     function setPlaying(on) {
       playing = on;
-      auto = false;
       updatePlay();
       schedule();
     }
@@ -2340,28 +2590,8 @@ git push</code></pre>
     updatePlay();
     return {
       start: function () { active = true; if (!game) select(0); else { draw(); schedule(); } },
-      stop: function () { active = false; clearTimeout(timer); }
+      stop: function () { active = false; setPlaying(false); }
     };
-  })();
-
-  (function chips() {
-    var box = document.getElementById('chips');
-    var items = [
-      ['空白格 · 面值 1', 'cell'],
-      ['校准区 · 3×3，永久归属', 't0'],
-      ['轮廓 · 被扫过时所属方报废', 't0', true],
-      ['基板缺陷 · 无主、不可进入', 'defect'],
-      ['关键图形区 · 面值 3', 'key', true],
-      ['加速区 · 整局可用，区内起步尝试走 2 格', 'boost']
-    ];
-    items.forEach(function (item) {
-      var chip = el('span', 'chip'), mark = el('i'), color = 'var(--' + item[1] + ')';
-      mark.style.background = item[2] ? 'var(--cell)' : color;
-      if (item[2]) mark.style.boxShadow = 'inset 0 0 0 3px var(--cell), inset 0 0 0 12px ' + color;
-      chip.appendChild(mark);
-      chip.appendChild(document.createTextNode(item[0]));
-      box.appendChild(chip);
-    });
   })();
 
   /* ================= 缩小基板的对战示例 ================= */
@@ -2540,8 +2770,6 @@ git push</code></pre>
       if (!raf && active && visible && !document.hidden && !reduce) raf = requestAnimationFrame(frame);
     }
 
-    reset();
-    if (reduce) for (var i = 0; i < 160; i++) tick();
     if ('IntersectionObserver' in window) {
       new IntersectionObserver(function (entries) { visible = entries[0].isIntersecting; kick(); }, { threshold: .1 }).observe(canvas);
     } else visible = true;
@@ -2550,7 +2778,15 @@ git push</code></pre>
     onTheme.push(refresh);
     window.addEventListener('resize', refresh);
     return {
-      start: function () { active = true; draw(); kick(); },
+      start: function () {
+        if (!game) {
+          reset();
+          if (reduce) for (var i = 0; i < 160; i++) tick();
+        }
+        active = true;
+        draw();
+        kick();
+      },
       stop: function () { active = false; cancelAnimationFrame(raf); raf = 0; }
     };
   })();
@@ -2568,8 +2804,22 @@ git push</code></pre>
     return svg;
   }
 
-  hooks.enter.problem = function () { Demo.start(); Mini.start(); };
-  hooks.leave.problem = function () { Demo.stop(); Mini.stop(); };
+  var examples = [
+    { panel: document.getElementById('rule-examples'), demo: Demo },
+    { panel: document.getElementById('mini-example'), demo: Mini }
+  ];
+  examples.forEach(function (example) {
+    example.panel.addEventListener('toggle', function () {
+      if (current === 'problem' && example.panel.open) example.demo.start();
+      else example.demo.stop();
+    });
+  });
+  hooks.enter.problem = function () {
+    examples.forEach(function (example) { if (example.panel.open) example.demo.start(); });
+  };
+  hooks.leave.problem = function () {
+    examples.forEach(function (example) { example.demo.stop(); });
+  };
 
   // 交给赛事平台脚本：它注册队伍、天梯、对局三页的钩子后调用 boot() 显示首屏
   window.Site = {
@@ -2738,7 +2988,7 @@ git push</code></pre>
       return s;
     }
     addSub(mine, '5b98d0d531e5', 'valid', 'python', null, 50);
-    addSub(mine, '9f5a2b714bb5', 'invalid', 'python', 'smoke_timeout：10 次超时或无效回复', 30);
+    addSub(mine, '9f5a2b714bb5', 'invalid', 'python', 'build_failed：构建未成功', 30);
     addSub(mine, 'a4933743ab33', 'valid', 'python', null, 26, { fetch: 33, build: 8325, push: 296 });
     var SAMPLES = (window.ExpoReplay && window.ExpoReplay.samples()) || [];
     var MAPS = SAMPLES.map(function (r) { return r.data.map.id; });
@@ -2763,8 +3013,6 @@ git push</code></pre>
     }
     [[order[3], 'ladder', 24, 0.5], [order[5], 'ladder', 20, 0.6], ['bot_l2', 'challenge', 16, 0.8], [order[2], 'challenge', 9, 0.3], [order[7], 'ladder', 5, 0.7], [order[4], 'ladder', 2, 0.5]]
       .forEach(function (x) { addGroup(x[1], x[0], x[2], x[3]); });
-    matches.push({ match_id: 'm_smoke-a493', kind: 'smoke', stage: 'prelim', map: MAPS[2] || 'R109', status: 'done', attempt: 1, teams: [mine, 'bot_l1'],
-      result: { winner: 0, reason: 'limit', score: [812, 210], turns: 600, errors: [0, 0] }, created_at: new Date(now - 26 * H).toISOString(), finished_at: new Date(now - 26 * H).toISOString() });
     var registrationOpen = new Date() < new Date(2026, 10, 14);
     function me() {
       var e = emp[personas[persona].eid], t = teamOf(e.employee_id);
@@ -2774,7 +3022,7 @@ git push</code></pre>
     function teamOf(eid) { for (var k in teams) if ((teams[k].members || []).some(function (m) { return m.employee_id === eid; })) return teams[k]; return null; }
     function view(t, full) {
       var o = { team_id: t.team_id, name: t.name, status: t.status, baseline: t.baseline, created_at: t.created_at, members: t.members };
-      if (full) { o.repo = { url: t.repo, branch: 'main' }; o.active_submission = t.active ? { submission_id: t.active.submission_id, commit: t.active.commit, language: t.active.language, validated_at: t.active.validated_at } : null; }
+      if (full) { o.repo = { url: t.repo, branch: 'master' }; o.active_submission = t.active ? { submission_id: t.active.submission_id, commit: t.active.commit, language: t.active.language, validated_at: t.active.validated_at } : null; }
       return o;
     }
     function fail(status, code, message, clause) { return Promise.reject({ status: status, error: { code: code, message: message, clause: clause } }); }
@@ -2788,12 +3036,12 @@ git push</code></pre>
     }
     function busy(tid) { return groups.some(function (g) { return g.initiator === tid && ['building', 'queued', 'running'].indexOf(g.status) >= 0; }); }
     function ratingRows() {
-      var all = Object.keys(teams).map(function (k) { return teams[k]; }).filter(function (t) { return t.baseline || t.active || t.groups > 0; });
+      var all = Object.keys(teams).map(function (k) { return teams[k]; }).filter(function (t) { return t.active || t.groups > 0; });
       all.sort(function (a, b) { return b.rating - a.rating; });
       var rows = [], placing = [], rank = 0;
       all.forEach(function (t) {
         var it = { team_id: t.team_id, name: t.name, rating: Math.round(t.rating), groups: t.groups, win_rate: Math.round(t.wr * 100) / 100, baseline: t.baseline, busy: busy(t.team_id) };
-        if (!t.baseline && t.groups < 10) { placing.push(Object.assign(it, { groups_done: t.groups, groups_required: 10 })); return; }
+        if (t.groups === 0) { placing.push(it); return; }
         if (!t.baseline) rank++;
         rows.push(Object.assign(it, { rank: t.baseline ? null : rank }));
       });
@@ -2803,9 +3051,9 @@ git push</code></pre>
     function startGroup(kind, opp, seed) {
       var m0 = me(), t = teams[m0.team_id];
       if (busy(t.team_id)) return fail(409, 'group_in_progress', '本队已有一组对局在进行，结束后再发起', '规章 §5.6');
-      if (!t.active && !newCommit) return fail(422, 'no_main', '仓库的 main 分支上还没有提交：先推送代码（演示模式：在队伍页点「模拟推送一次新提交」）', '规章 §3.4');
+      if (!t.active && !newCommit) return fail(422, 'no_master', '仓库的 master 分支上还没有提交：先推送代码（演示模式：在队伍页点「模拟推送一次新提交」）', '规章 §3.4');
       if (kind === 'ladder') {
-        var near = Object.keys(teams).filter(function (k) { return k !== t.team_id && Math.abs(teams[k].rating - t.rating) <= 100 && (teams[k].active || teams[k].baseline); });
+        var near = Object.keys(teams).filter(function (k) { return k !== t.team_id && Math.abs(teams[k].rating - t.rating) <= 100 && (teams[k].active || teams[k].groups > 0); });
         opp = near.length ? near[Math.floor(rnd() * near.length)] : 'bot_l2';
       }
       var map = seed ? 'R' + seed : MAPS[Math.floor(rnd() * MAPS.length)];
@@ -2817,7 +3065,6 @@ git push</code></pre>
       var steps = [];
       if (s) {
         steps.push([400, function () { emit('submission.building', { submission_id: s.submission_id }); }]);
-        steps.push([1600, function () { s.status = 'testing'; g.status = 'building'; emit('submission.testing', { submission_id: s.submission_id }); }]);
         steps.push([2000, function () { s.status = 'valid'; s.validated_at = new Date().toISOString(); t.active = s; g.status = 'queued'; emit('submission.valid', { submission_id: s.submission_id }); }]);
       }
       steps.push([700, function () { g.status = 'running'; emit('match.running', { group_id: gid }); }]);
@@ -2830,7 +3077,8 @@ git push</code></pre>
             result: { winner: r.winner, reason: 'limit', score: r.score, turns: 600, errors: [0, 0] }, created_at: g.created_at, finished_at: new Date().toISOString() };
           matches.unshift(m); g.matches.push(m);
         });
-        var S = w / 2, ra = t.rating, rb = teams[opp].rating, k = t.groups < 10 ? 40 : 20, E = 1 / (1 + Math.pow(10, (rb - ra) / 400)), d = Math.round(k * (S - E) * 10) / 10;
+        var S = w / 2, ra = t.rating, rb = teams[opp].rating;
+        var E = 1 / (1 + Math.pow(10, (rb - ra) / 400)), d = 20 * (S - E);
         t.rating += d; teams[opp].rating -= d; t.groups++; teams[opp].groups++;
         g.status = 'done'; g.finished_at = new Date().toISOString(); g.result = { S: [S, 1 - S], wins: [w, 2 - w], rating_change: {} };
         g.result.rating_change[t.team_id] = d; g.result.rating_change[opp] = -d;
@@ -2971,12 +3219,12 @@ git push</code></pre>
       var sub = t.active_submission;
       box.appendChild(cell('我的队伍', t.name, t.members.map(function (x) { return x.name; }).join('、') + (sub ? '　有效提交 ' + sub.commit : '　还没有有效提交'),
         h('button', { class: 'btn', type: 'button', onclick: function () { Site.show('team', true); }, text: '队伍与提交' })));
-      box.appendChild(cell('天梯', row ? String(row.rating) : '—', row ? (row.rank ? '第 ' + row.rank + ' 名 · ' : '定位中 ' + row.groups + '/10 · ') + row.groups + ' 组' : '推送代码后发起第一组对局',
+      box.appendChild(cell('天梯', row ? String(row.rating) : '—', row ? (row.rank ? '第 ' + row.rank + ' 名 · ' : '待首组结算 · ') + row.groups + ' 组' : '推送代码后发起第一组对局',
         h('button', { class: 'btn', type: 'button', onclick: function () { Site.show('ladder', true); }, text: '去天梯' }), true));
       renderGuide(sub ? (row && row.groups ? 4 : 3) : t.repo && t.repo.url ? 2 : 1);
     }).catch(function () {});
     function renderGuide(done) {
-      [['报名组队', '队长填写队名和两名队员工号'], ['拿到仓库与材料包', '主办方在 Codehub 建好仓库；材料包在公开仓库'], ['推送代码', 'Python 或 C++，推送到 main 分支'], ['发起对局', '匹配或挑战，回放逐回合复盘']]
+      [['报名组队', '队长填写队名和两名队员工号'], ['拿到仓库与材料包', '主办方在 Codehub 建好仓库；材料包在公开仓库'], ['推送代码', 'Python 或 C++，推送到 master 分支'], ['发起对局', '匹配或挑战，回放逐回合复盘']]
         .forEach(function (g, i) { guide.appendChild(h('li', { class: i < done ? 'done' : i === done ? 'now' : '' }, [h('span', { class: 'n', text: i < done ? '✓' : String(i + 1) }), h('b', { text: g[0] }), h('span', { text: g[1] })])); });
     }
   }
@@ -3073,7 +3321,7 @@ git push</code></pre>
     var repo = url ? [h('div', { class: 'repo' }, [h('code', { text: url }), h('button', { class: 'btn', type: 'button', text: '复制', onclick: function () {
       (navigator.clipboard ? navigator.clipboard.writeText(url) : Promise.reject()).then(function () { toast('已复制仓库地址'); }, function () { toast('请手动选择地址复制'); });
     } })]), h('pre', { class: 'cmd', text: 'git remote add contest ' + url + '\ngit push contest HEAD:master' }),
-    h('p', { class: 'note', style: 'margin-top:8px', text: 'master 分支上的代码就是参赛代码，开发中的代码请放在其他分支。发起对局时平台读取 master 的最新提交，新提交会先构建并与基准 L1 试打一局。' })]
+    h('p', { class: 'note', style: 'margin-top:8px', text: 'master 分支上的代码就是参赛代码，开发中的代码请放在其他分支。发起天梯对决时，平台固定双方的参赛版本并按同一规范构建。' })]
       : [h('p', { class: 'note', text: '主办方正在为本队创建 Codehub 仓库，创建后地址会显示在这里。' })];
     if (API.mode === 'live' && API.me.trial && url) {
       var sel = h('select', { 'aria-label': '示例代码' }, [['l1', '基准 L1 随机'], ['l2', '基准 L2 贪心'], ['l3', '基准 L3 搜索'], ['cpp', 'C++ 示例'], ['numpy', 'Python + numpy 示例']]
@@ -3081,14 +3329,14 @@ git push</code></pre>
       var pb = h('button', { class: 'btn', type: 'button', text: '推送到 master', onclick: function () {
         pb.disabled = true;
         API.post('/api/v1/teams/' + t.team_id + '/trial-push', { sample: sel.value }).then(function (d) {
-          toast('已把「' + d.sample + '」推送到 master：' + d.commit + '。到天梯页发起对局时会先构建并试打'); pb.disabled = false;
+          toast('已把「' + d.sample + '」推送到 master（' + d.commit + '）'); pb.disabled = false;
         }).catch(function (e) { toast(errText(e), true); pb.disabled = false; });
       } });
       repo.push(h('div', { class: 'trial' }, [h('b', { text: '试用：' }), '不必在本机配置 Git，直接把一份示例代码推送到本队仓库', sel, pb]));
       repo.push(h('p', { class: 'note', style: 'margin-top:8px', text: '也可以用 git 推送自己的代码：git push 时用户名、密码与本平台账号相同（' + API.me.username + '）。' }));
     }
     if (API.mode === 'demo' && url) repo.push(h('button', { class: 'btn', type: 'button', style: 'margin-top:10px', text: Demo.pending() ? '已模拟推送 ' + Demo.pending() : '（演示）模拟推送一次新提交', onclick: function () {
-      var c = Demo.pushCommit(); this.textContent = '已模拟推送 ' + c; toast('master 上有了新提交 ' + c + '，下次发起对局时会先构建并试打');
+      var c = Demo.pushCommit(); this.textContent = '已模拟推送 ' + c; toast('master 上有了新提交 ' + c + '，下次天梯对决会使用这个版本');
     } }));
     box.appendChild(h('div', { class: 'tgrid' }, [
       h('section', null, [h('h3', null, ['成员', h('small', { text: cap ? '报名截止前队长可直接更换队员' : '成员变更由队长操作' })]), ul]),
@@ -3139,15 +3387,13 @@ git push</code></pre>
 
   // ---------------------------------------------------------------- 天梯：本队、榜单、挑战
   var ladderData = null, myGroups = [];
-  var STEPS = [['检测提交', 'detected'], ['构建镜像', 'building'], ['冒烟试打', 'testing'], ['对局 2 局', 'running'], ['结算天梯分', 'done']];
+  var STEPS = ['固定提交', '构建镜像', '对局 2 局', '结算天梯分'];
   function stepIndex(g) {
     if (!g) return -1;
     if (g.status === 'cancelled') return -2;
-    if (g.status === 'done') return 5;
-    if (g.status === 'running') return 3;
-    if (g.status === 'queued') return g.submission && g.submission.status === 'valid' && g.matches.length === 0 ? 3 : 3;
-    var s = g.submission && g.submission.status;
-    return s === 'testing' ? 2 : s === 'building' ? 1 : 0;
+    if (g.status === 'done') return STEPS.length;
+    if (g.status === 'running' || g.status === 'queued') return 2;
+    return g.status === 'building' ? 1 : 0;
   }
   function renderLadder() {
     var m = API.me;
@@ -3169,21 +3415,21 @@ git push</code></pre>
     var btn = h('button', { class: 'btn pri', type: 'button', disabled: active || !m.ladder_open, text: active ? '对局进行中…' : '发起匹配', onclick: function () {
       btn.disabled = true;
       API.post('/api/v1/ladder/matches').then(function (d) {
-        toast(d.status === 'building' ? '发现新提交 ' + d.my_commit + '，先构建并试打' : '已匹配到对手，对局排队中');
+        toast(d.status === 'building' ? '正在构建提交 ' + d.my_commit : '已匹配到对手，对局排队中');
         renderLadder();
       }).catch(function (e) { toast(errText(e), true); btn.disabled = false; });
     } });
     var top = h('div', { class: 'me-top' }, [
       h('div', null, [h('div', { class: 'k', text: '天梯分' }), h('div', { class: 'v', text: row ? String(row.rating) : '1200' })]),
       h('div', null, row && row.rank ? [h('div', { class: 'k', text: '排名' }), h('div', { class: 'v' }, [String(row.rank), h('small', { text: '/ ' + ladderData.rows.filter(function (x) { return !x.baseline; }).length })])]
-        : [h('div', { class: 'k', text: '定位赛' }), h('div', { class: 'v' }, [String(row ? row.groups : 0), h('small', { text: '/ 10 组' })]), h('div', { class: 'prog' }, [h('i', { style: 'width:' + ((row ? row.groups : 0) * 10) + '%' })])]),
+        : [h('div', { class: 'k', text: '排名' }), h('div', { class: 'v', text: '待首组结算' })]),
       h('div', null, [h('div', { class: 'k', text: '已完成' }), h('div', { class: 'v' }, [String(row ? row.groups : 0), h('small', { text: '组' })])]),
       h('div', null, [h('div', { class: 'k', text: '胜率' }), h('div', { class: 'v', text: row && row.win_rate != null ? Math.round(row.win_rate * 100) + '%' : '—' })]),
       h('div', { class: 'go' }, [btn, h('span', { class: 'note', text: m.team_role === 'captain' ? '挑战：在下方榜单选择对手' : '挑战由队长发起' })])
     ]);
     box.appendChild(top);
     var cur = h('div', { class: 'cur' });
-    if (!g) cur.appendChild(h('p', { class: 'note', text: '本队还没有发起过对局。推送代码到 main 后点「发起匹配」，第一次会先构建并试打（约 15～80 秒）。' }));
+    if (!g) cur.appendChild(h('p', { class: 'note', text: '推送代码到 master 后，即可发起天梯对局。' }));
     else {
       var si = stepIndex(g), opp = g.names[1], res = g.result;
       cur.appendChild(h('div', { class: 'line' }, [h('b', { text: (active ? '进行中：' : '最近一组：') + KIND[g.kind] + ' ' + opp }), h('span', { class: 'note', text: '地图 ' + g.map + ' · ' + ago(g.created_at) }),
@@ -3191,12 +3437,13 @@ git push</code></pre>
         res ? h('span', null, ['本组 ' + res.wins[0] + ' : ' + res.wins[1] + '，天梯分 ', delta(res.rating_change[m.team_id])]) : null,
         g.status === 'cancelled' ? h('span', { class: 'res-l', text: '已取消：' + (g.reason || '') }) : null]));
       var ol = h('ol', { class: 'stepper' });
-      STEPS.forEach(function (s, i) {
-        var cls = si === -2 ? (i <= 2 ? (i === 2 || (g.reason || '').indexOf('build') >= 0 && i === 1 ? 'fail' : 'done') : '') : i < si ? 'done' : i === si && si < 5 ? 'now' : si === 5 ? 'done' : '';
-        if (si === -2 && (g.reason || '').indexOf('format') >= 0) cls = i === 0 ? 'fail' : '';
-        var info = '';
-        if (i === 3 && g.matches.length) info = g.matches.filter(function (x) { return x.status === 'done'; }).length + '/2 局完成';
-        ol.appendChild(h('li', { class: cls }, [s[0], info ? h('span', { text: info }) : null]));
+      var failedAt = (g.reason || '').indexOf('format') >= 0 ? 0 : 1;
+      STEPS.forEach(function (label, i) {
+        var cls = i < si ? 'done' : i === si ? 'now' : '';
+        if (si === -2) cls = i < failedAt ? 'done' : i === failedAt ? 'fail' : '';
+        var info = i === 2 && g.matches.length
+          ? g.matches.filter(function (x) { return x.status === 'done'; }).length + '/2 局完成' : '';
+        ol.appendChild(h('li', { class: cls }, [label, info ? h('span', { text: info }) : null]));
       });
       cur.appendChild(ol);
       if (!active && g.status === 'done') cur.appendChild(h('div', null, [h('button', { class: 'linkbtn', type: 'button', text: '看这组的回放 →', onclick: function () { pendingMatch = g.matches[0] && g.matches[0].match_id; Site.show('matches', true); } })]));
@@ -3206,7 +3453,7 @@ git push</code></pre>
   function board() {
     var ol = clear($('ladder-list')), m = API.me, cap = m && m.team_role === 'captain', mineBusy = myGroups.some(function (g) { return g.initiator === (m && m.team_id) && ['building', 'queued', 'running'].indexOf(g.status) >= 0; });
     $('ladder-upd').textContent = '更新于 ' + when(ladderData.updated_at);
-    if (!ladderData.rows.length) ol.appendChild(h('li', null, [h('span', { class: 'note', style: 'grid-column:1/-1', text: '还没有队伍完成定位赛' })]));
+    if (!ladderData.rows.length) ol.appendChild(h('li', null, [h('span', { class: 'note', style: 'grid-column:1/-1', text: '天梯榜将在首组对局结算后更新' })]));
     ladderData.rows.forEach(function (r, i) {
       var me = m && r.team_id === m.team_id;
       var act = h('span', { class: 'act' });
@@ -3222,11 +3469,11 @@ git push</code></pre>
     });
     var pl = clear($('placing'));
     if (ladderData.placing.length) {
-      pl.appendChild(h('h3', { text: '定位中（完成 10 组后进入榜单）' }));
+      pl.appendChild(h('h3', { text: '待首组结算' }));
       var ul = h('ul');
       ladderData.placing.forEach(function (r) {
         var me = m && r.team_id === m.team_id;
-        ul.appendChild(h('li', null, [h('b', { text: r.name + (me ? '（本队）' : '') }), h('span', { text: r.groups_done + '/10 组 · ' + r.rating }),
+        ul.appendChild(h('li', null, [h('b', { text: r.name + (me ? '（本队）' : '') }), h('span', { text: String(r.rating) }),
           cap && !me ? h('button', { class: 'linkbtn', type: 'button', disabled: mineBusy, text: '挑战', onclick: function () { openChallenge(r); } }) : null]));
       });
       pl.appendChild(ul);
@@ -3243,7 +3490,7 @@ git push</code></pre>
   function send(seed) {
     var body = { opponent_team_id: target.team_id }; if (seed) body.map_seed = +seed;
     API.post('/api/v1/challenges', body).then(function (d) {
-      toast((d.status === 'building' ? '发现新提交 ' + d.my_commit + '，先构建并试打；' : '') + '已向 ' + target.name + ' 发起挑战，地图 ' + d.map);
+      toast('已向 ' + target.name + ' 发起挑战，地图 ' + d.map);
       renderLadder();
     }).catch(function (e) { toast(errText(e), true); });
   }
@@ -3376,7 +3623,7 @@ git push</code></pre>
       }
       function act(label, fn) { return h('button', { class: 'btn', type: 'button', text: label, onclick: fn }); }
       box.appendChild(h('div', { class: 'adm-row' }, [h('div', { class: 'toggles' }, [tg('registration_open', '报名开放'), tg('ladder_open', '天梯开放'), tg('rr_published', '公示单循环积分榜')]),
-        act('提交截止（锁仓）', function () { if (confirm('提交截止会锁仓、关闭天梯，并以各队 main 当前的提交为最终提交统一验证，确定？')) API.post('/admin/v1/stages/prelim/freeze').then(function (d) { toast('已锁仓，' + d.candidates.length + ' 支队伍的最终提交进入统一验证'); }).catch(function (e) { toast(errText(e), true); }); }),
+        act('提交截止（锁仓）', function () { if (confirm('提交截止会锁仓、关闭天梯，并以各队 master 当前的提交为最终提交统一验证，确定？')) API.post('/admin/v1/stages/prelim/freeze').then(function (d) { toast('已锁仓，' + d.candidates.length + ' 支队伍的最终提交进入统一验证'); }).catch(function (e) { toast(errText(e), true); }); }),
         act('重新开放推送', function () { API.post('/admin/v1/repos:unlock').then(function () { toast('已重新开放推送'); }).catch(function (e) { toast(errText(e), true); }); }),
         act('创建初赛单循环', function () { if (confirm('为全部有有效提交的队伍创建单循环？')) API.post('/admin/v1/tournaments', { kind: 'rr', stage: 'prelim' }).then(function (d) { toast('单循环：' + d.teams + ' 队、' + d.duels + ' 次对决、' + d.matches + ' 局'); }).catch(function (e) { toast(errText(e), true); }); }),
         act('按积分榜创建决赛对阵', function () { API.post('/admin/v1/tournaments', { kind: 'final' }).then(function (d) { toast('已创建 ' + d.duels.length + ' 场第一轮对决'); liveView(); }).catch(function (e) { toast(errText(e), true); }); })]));
